@@ -99,16 +99,31 @@ def write_dataset(
     return path, sha256_json(cases)
 
 
+def resolve_dataset_path(path: str | Path) -> Path:
+    """Accept a dataset dir or a direct cases.jsonl path, return the cases file.
+
+    The CLI convention is a dataset *directory* containing cases.jsonl; tests and
+    callers that already hold a file path pass through unchanged.
+    """
+    p = Path(path)
+    if p.is_dir():
+        p = p / "cases.jsonl"
+    if not p.exists():
+        raise FileNotFoundError(f"dataset not found: {p}")
+    return p
+
+
 def read_dataset(path: str | Path) -> list[dict[str, Any]]:
-    """Read cases.jsonl; raises ValueError on malformed content."""
+    """Read cases from a dataset dir or cases.jsonl; raises ValueError on bad content."""
+    resolved = resolve_dataset_path(path)
     cases: list[dict[str, Any]] = []
-    for lineno, line in enumerate(Path(path).read_text().splitlines(), 1):
+    for lineno, line in enumerate(resolved.read_text().splitlines(), 1):
         if not line.strip():
             continue
         try:
             cases.append(json.loads(line))
         except json.JSONDecodeError as e:
-            raise ValueError(f"{path}:{lineno}: malformed JSON: {e}") from e
+            raise ValueError(f"{resolved}:{lineno}: malformed JSON: {e}") from e
     return cases
 
 

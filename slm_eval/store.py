@@ -109,6 +109,11 @@ class Store:
             raise KeyError(f"run not found: {run_id}")
         return dict(row)
 
+    def get_run_safe(self, run_id: str) -> dict[str, Any] | None:
+        """Like get_run but returns None instead of raising (idempotent create)."""
+        row = self._conn.execute("SELECT * FROM run WHERE run_id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
     def update_run(self, run_id: str, expected_version: int, **fields: Any) -> int:
         """Optimistic-locked state write: bumps version, raises StateConflict (§4.3)."""
         allowed = {"status", "holdout_hash", "dataset_hash", "model_sha256"}
