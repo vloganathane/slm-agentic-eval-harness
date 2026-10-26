@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Harness artifacts (never committed)
+slm_eval.db
+runs/
+*.gguf
+.env
+
+# Local inputs (datasets, calibration labels)
+data/
+calibration/*.jsonl
+
+# Tooling dirs
+.pi/
+.drupal-mcp/
