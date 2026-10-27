@@ -555,7 +555,7 @@ impl EvalStore {
     }
 
     pub async fn get_total_cost(&self, run_id: &str) -> Result<f64> {
-        let row = sqlx::query("SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_ledger WHERE run_id = ?")
+        let row = sqlx::query("SELECT COALESCE(SUM(cost_usd), 0.0) as total FROM cost_ledger WHERE run_id = ?")
             .bind(run_id).fetch_one(&*self.pool).await?;
         Ok(row.get("total"))
     }
@@ -618,9 +618,9 @@ impl EvalStore {
             config_hash: r.get("config_hash"),
             started_at: r.get("started_at"),
             completed_at: r.get("completed_at"),
-            status: serde_json::from_str(r.get("status_json")).unwrap_or(RunStatus::Running),
+            status: serde_json::from_str(&r.get::<String, _>("status")).unwrap_or(RunStatus::Running),
             total_cost_usd: r.get("total_cost_usd"),
-            stages_completed: serde_json::from_str(r.get("stages_completed_json")).unwrap_or_default(),
+            stages_completed: serde_json::from_str(&r.get::<String, _>("stages_completed_json")).unwrap_or_default(),
         }))
     }
 }

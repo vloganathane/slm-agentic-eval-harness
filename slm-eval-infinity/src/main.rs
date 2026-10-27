@@ -87,6 +87,11 @@ enum ReviewAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async_main()).await
+}
+
+async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();

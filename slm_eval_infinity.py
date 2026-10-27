@@ -174,11 +174,11 @@ def cmd_review(args: argparse.Namespace) -> int:
     
     cmd = [str(binary_path), "--database", args.database, "review"]
     if args.action == "list":
-        cmd.extend(["list", "--run-id", args.run_id])
+        cmd.extend(["list", args.run_id])
     elif args.action == "approve":
-        cmd.extend(["approve", "--task-id", args.task_id])
+        cmd.extend(["approve", args.task_id])
     elif args.action == "reject":
-        cmd.extend(["reject", "--task-id", args.task_id])
+        cmd.extend(["reject", args.task_id])
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     print(result.stdout)
@@ -256,13 +256,13 @@ def main() -> int:
     review_sub = review_parser.add_subparsers(dest="action", required=True)
     
     list_parser = review_sub.add_parser("list", help="List review tasks")
-    list_parser.add_argument("--run-id", required=True, help="Run ID to list tasks for")
+    list_parser.add_argument("run_id", help="Run ID to list tasks for")
     
     approve_parser = review_sub.add_parser("approve", help="Approve a review task")
-    approve_parser.add_argument("--task-id", required=True, help="Task ID to approve")
+    approve_parser.add_argument("task_id", help="Task ID to approve")
     
     reject_parser = review_sub.add_parser("reject", help="Reject a review task")
-    reject_parser.add_argument("--task-id", required=True, help="Task ID to reject")
+    reject_parser.add_argument("task_id", help="Task ID to reject")
     
     # Adapt CORD command
     adapt_parser = subparsers.add_parser("adapt-cord", help="Convert CORD dataset")

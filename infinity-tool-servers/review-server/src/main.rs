@@ -88,7 +88,7 @@ async fn invoke_tool(
     State(state): State<AppState>,
     Json(inv): Json<RapInvocation>,
 ) -> Result<StatusCode, StatusCode> {
-    let args: ReviewArgs = serde_json::from_value(inv.arguments)
+    let args: ReviewArgs = serde_json::from_value(inv.arguments.clone())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Insert review tasks
@@ -133,7 +133,7 @@ async fn invoke_tool(
 
     // Wait for all tasks to resolve (with timeout)
     let mut resolved = 0;
-    let mut final_status = "pending";
+    let mut final_status = String::from("pending");
     let mut final_resolution: Option<Value> = None;
 
     while resolved < task_ids.len() {
@@ -141,7 +141,7 @@ async fn invoke_tool(
             Some(res) = rx.recv() => {
                 resolved += 1;
                 if res.status != "pending" {
-                    final_status = &res.status;
+                    final_status = res.status.clone();
                     final_resolution = res.resolution;
                 }
                 if resolved == task_ids.len() {
@@ -150,7 +150,7 @@ async fn invoke_tool(
             }
             _ = tokio::time::sleep(Duration::from_secs(3600)) => {
                 // 1 hour timeout
-                final_status = "timeout";
+                final_status = String::from("timeout");
                 break;
             }
         }
@@ -223,13 +223,18 @@ async fn resolve_review(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Notify waiting agent
-    let key = format!("review:{}", task_id);
-    if let Some(tx) = state.wait_channels.lock().await.get(&key) {
-        let _ = tx.send(ReviewResolution {
-            task_id: task_id.to_string(),
-            status: status.to_string(),
-            resolution,
-        }).await;
+    // Need to find the key that matches this task_id
+    let mut channels = state.wait_channels.lock().await;
+    let key = channels.keys().find(|k| k.contains(task_id)).cloned();
+    
+    if let Some(key) = key {
+        if let Some(tx) = channels.remove(&key) {
+            let _ = tx.send(ReviewResolution {
+                task_id: task_id.to_string(),
+                status: status.to_string(),
+                resolution,
+            }).await;
+        }
     }
 
     Ok(StatusCode::OK)
