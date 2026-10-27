@@ -9,6 +9,11 @@ dist/
 build/
 *.egg-info/
 
+# Rust
+target/
+Cargo.lock
+*.rs.bk
+
 # Harness artifacts (never committed)
 slm_eval.db
 runs/
@@ -22,3 +27,9 @@ calibration/*.jsonl
 # Tooling dirs
 .pi/
 .drupal-mcp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

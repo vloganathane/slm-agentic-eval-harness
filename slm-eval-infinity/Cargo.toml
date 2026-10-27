@@ -1,0 +1,53 @@
+[package]
+name = "slm-eval-infinity"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SLM Evaluation Harness on Infinity Agent Runtime"
+
+[dependencies]
+# Infinity crates
+infinity-agent-core = { path = "/tmp/infinity/crates/infinity-agent-core" }
+infinity-provider-protocol = { path = "/tmp/infinity/crates/infinity-provider-protocol", features = ["remote"] }
+infinity-protocol = { path = "/tmp/infinity/crates/infinity-protocol" }
+rap-protocol = { path = "/tmp/infinity/crates/rap-protocol" }
+rap-client = { path = "/tmp/infinity/crates/rap-client" }
+
+# Web & HTTP
+axum = { version = "0.8", features = ["macros", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros", "time", "sync", "io-util", "io-std", "process"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Config & CLI
+clap = { version = "4", features = ["derive", "env"] }
+toml = "0.8"
+config = "0.14"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "json", "chrono", "uuid"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async
+async-trait = "0.1"
+futures = "0.3"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio-test = "0.4"

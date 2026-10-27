@@ -1,0 +1,52 @@
+task_description: Structured field extraction from receipt/invoice images (CORD-v2)
+task_type: extraction
+fields:
+  exact_match_fields:
+  - total
+  subjective_fields:
+  - line_items
+  validators:
+    total:
+      type: numeric
+      tolerance: 0.01
+strata:
+  keys:
+  - quality
+  mode: single_key
+split:
+  fraction: 0.5
+  seed: 42
+  strategy: stratified
+stats:
+  seed: 42
+  resamples: 1000
+thresholds:
+  target_f1: 0.85
+  failure_threshold: 0.5
+  min_per_stratum: 5
+judge:
+  endpoint: https://integrate.api.nvidia.com/v1
+  model: nvidia/nemotron-3.5-bolt-e4b
+  api_key_env: NVIDIA_API_KEY
+  prompt_version: v1.0
+  calibration:
+    path: calibration/judge.jsonl
+    min_pairs: 50
+    target_kappa: 0.85
+    recalibrate_every_rounds: 5
+inference:
+  backend: llama_server
+  base_url: http://127.0.0.1:8080/v1
+  timeout_seconds: 1800
+  retry:
+    max_attempts: 3
+    backoff_base: 2
+human_review:
+  timeout_hours: 0
+  notify: []
+cost_control:
+  max_cost_per_round_usd: 0.0
+  alert_at_usd: 0.0
+reporting:
+  formats:
+  - json
