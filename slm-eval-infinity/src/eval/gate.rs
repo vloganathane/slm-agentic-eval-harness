@@ -1,167 +1,100 @@
-//! Gate evaluation logic for promotion decisions
+//! Gate decision (SPEC_V3 §6.5): pure, CI-lower-bound-only, no point estimates.
 
-use anyhow::Result;
-use crate::models::{GateDecision, GateDecisionType, AggregateScores, CalibrationResult};
+use crate::config::ThresholdsConfig;
+use crate::models::{GateDecision, StratumResult, StratumStatus};
 
-/// Evaluate the gate decision based on scores, calibration, and pending reviews
-/// 
-/// Uses CI lower bounds (never point estimates) per SPEC_V3.md requirements.
-/// Exit codes: 0=promote, 1=blocked, 2=error
-pub fn evaluate_gate(
-    scores: &AggregateScores,
-    calibration: &CalibrationResult,
-    pending_reviews: usize,
-    micro_f1_target: f64,
-    kappa_target: f64,
-    min_strata_n: usize,
-) -> GateDecision {
-    let mut reasons = Vec::new();
-    let mut promote = true;
-
-    // Check micro-F1 using CI LOWER BOUND (not point estimate)
-    if scores.ci_lower < micro_f1_target {
-        promote = false;
-        reasons.push(format!(
-            "micro-F1 CI lower bound {:.3} < target {:.3}",
-            scores.ci_lower, micro_f1_target
-        ));
-    }
-
-    // Check κ calibration using CI LOWER BOUND
-    if calibration.ci_lower < kappa_target {
-        promote = false;
-        reasons.push(format!(
-            "κ CI lower bound {:.3} < target {:.3}",
-            calibration.ci_lower, kappa_target
-        ));
-    }
-
-    // Check minimum strata sample size
-    for (strata, agg) in &scores.per_strata {
-        if agg.n < min_strata_n {
-            promote = false;
-            reasons.push(format!(
-                "Strata '{}' has n={} < min_n={}",
-                strata, agg.n, min_strata_n
-            ));
-        }
-    }
-
-    // Check pending reviews - if any pending, cannot promote
-    if pending_reviews > 0 {
-        promote = false;
-        reasons.push(format!("{} review tasks pending resolution", pending_reviews));
-    }
-
-    // Determine decision type and exit code
-    let (decision, exit_code) = if !promote {
-        if pending_reviews > 0 {
-            (GateDecisionType::BlockedPendingReview, 1)
-        } else if !reasons.is_empty() {
-            (GateDecisionType::Blocked, 1)
-        } else {
-            (GateDecisionType::Error, 2)
-        }
-    } else {
-        (GateDecisionType::Promote, 0)
-    };
-
-    GateDecision {
-        decision,
-        promote,
-        micro_f1: scores.micro_f1,
-        ci_lower: scores.ci_lower,
-        ci_upper: scores.ci_upper,
-        kappa: calibration.kappa,
-        kappa_ci_lower: calibration.ci_lower,
-        strata_pass: reasons.iter().all(|r| !r.contains("Strata")),
-        calibration_pass: calibration.ci_lower >= kappa_target,
-        pending_reviews,
-        reasons,
-        exit_code,
-    }
+#[derive(Debug, Clone)]
+pub struct GateInputs {
+    pub run_completed: bool,
+    pub overall_micro_f1: f64,
+    pub overall_ci_lower: f64,
+    pub overall_ci_upper: f64,
+    pub overall_n: usize,
+    pub strata: Vec<StratumResult>,
+    pub kappa: Option<f64>,
+    pub pending_reviews: usize,
+    pub subjective_fields: Vec<String>,
+    pub defect_rate: Option<f64>,
+    pub defect_n: usize,
+    pub total_n: usize,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::{AggregateScores, FieldScore, StrataAggregate, CalibrationResult};
-    use std::collections::HashMap;
+pub fn classify_strata(strata: &[StratumResult], thresholds: &ThresholdsConfig) -> Vec<StratumResult> {
+    let mut out = Vec::new();
+    for s in strata {
+        let status = if s.n < thresholds.min_per_stratum as usize {
+            StratumStatus::InsufficientN
+        } else if s.ci_upper <= thresholds.failure_threshold {
+            StratumStatus::Blocker
+        } else if s.micro_f1 < thresholds.target_f1 {
+            StratumStatus::Warning
+        } else {
+            StratumStatus::Ok
+        };
+        out.push(StratumResult {
+            key: s.key.clone(),
+            n: s.n,
+            micro_f1: s.micro_f1,
+            ci_lower: s.ci_lower,
+            ci_upper: s.ci_upper,
+            status,
+        });
+    }
+    out
+}
 
-    fn make_test_scores(micro_f1: f64, ci_lower: f64, ci_upper: f64) -> AggregateScores {
-        AggregateScores {
-            micro_f1,
-            ci_lower,
-            ci_upper,
-            per_field: HashMap::new(),
-            per_strata: HashMap::new(),
-            dataset_defect: 0,
-            total_cases: 100,
-            evaluated_cases: 100,
+pub fn dataset_defect_rate(signal_values: &[String]) -> (f64, usize) {
+    if signal_values.is_empty() { return (0.0, 0); }
+    let defect_n = signal_values.iter().filter(|v| v.as_str() == "unextractable").count();
+    (defect_n as f64 / signal_values.len() as f64, defect_n)
+}
+
+pub fn decide_gate(inputs: &GateInputs, thresholds: &ThresholdsConfig) -> GateDecision {
+    if !inputs.run_completed {
+        return GateDecision { status: "error".into(), promote: false, reason: "run_incomplete".into(), blockers: vec![], warnings: vec![] };
+    }
+    let mut blockers: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let micro_f1 = inputs.overall_micro_f1;
+    let ci_lower = inputs.overall_ci_lower;
+    let _ci_upper = inputs.overall_ci_upper;
+    if ci_lower < thresholds.target_f1 {
+        blockers.push(format!("ci_lower_below_target: {:.3} < {} (point {:.3} cannot gate)", ci_lower, thresholds.target_f1, micro_f1));
+    }
+
+    let classified = classify_strata(&inputs.strata, thresholds);
+    for s in classified {
+        if s.status == StratumStatus::Blocker {
+            blockers.push(format!("stratum_blocker: {} n={} ci_upper={:.3}", s.key, s.n, s.ci_upper));
+        } else if s.status == StratumStatus::Warning {
+            warnings.push(format!("stratum_below_target: {} micro_f1={:.3}", s.key, s.micro_f1));
+        } else if s.status == StratumStatus::InsufficientN {
+            warnings.push(format!("insufficient_n: {} n={} < {}", s.key, s.n, thresholds.min_per_stratum));
         }
     }
 
-    fn make_test_calibration(kappa: f64, ci_lower: f64, ci_upper: f64) -> CalibrationResult {
-        CalibrationResult {
-            kappa,
-            ci_lower,
-            ci_upper,
-            n_pairs: 100,
-            n_agree: 90,
-            n_disagree: 10,
+    if let Some(dr) = inputs.defect_rate {
+        if dr > 0.0 {
+            warnings.push(format!("dataset_defect: {}/{} cases ({:.2}) unextractable — excluded from micro-F1", inputs.defect_n, inputs.total_n, dr));
         }
     }
 
-    #[test]
-    fn test_gate_promote() {
-        let scores = make_test_scores(0.90, 0.87, 0.93);
-        let cal = make_test_calibration(0.95, 0.90, 1.0);
-        let gate = evaluate_gate(&scores, &cal, 0, 0.85, 0.85, 5);
-        assert!(gate.promote);
-        assert_eq!(gate.decision, GateDecisionType::Promote);
-        assert_eq!(gate.exit_code, 0);
+    if !inputs.subjective_fields.is_empty() {
+        match inputs.kappa {
+            None => blockers.push("kappa_missing: subjective fields present but no calibration".to_string()),
+            Some(k) => { if k < 0.85 { blockers.push(format!("kappa_below_target: {:.3} < 0.85", k)); } }
+        }
     }
 
-    #[test]
-    fn test_gate_blocked_micro_f1() {
-        let scores = make_test_scores(0.90, 0.80, 0.95); // CI lower < target
-        let cal = make_test_calibration(0.95, 0.90, 1.0);
-        let gate = evaluate_gate(&scores, &cal, 0, 0.85, 0.85, 5);
-        assert!(!gate.promote);
-        assert_eq!(gate.decision, GateDecisionType::Blocked);
-        assert_eq!(gate.exit_code, 1);
-        assert!(gate.reasons.iter().any(|r| r.contains("micro-F1")));
+    if inputs.pending_reviews > 0 {
+        warnings.push(format!("pending_reviews: {}", inputs.pending_reviews));
+        return GateDecision { status: "blocked_pending_review".into(), promote: false, reason: "pending_human_review".into(), blockers, warnings };
     }
 
-    #[test]
-    fn test_gate_blocked_kappa() {
-        let scores = make_test_scores(0.90, 0.87, 0.93);
-        let cal = make_test_calibration(0.90, 0.80, 0.95); // CI lower < target
-        let gate = evaluate_gate(&scores, &cal, 0, 0.85, 0.85, 5);
-        assert!(!gate.promote);
-        assert_eq!(gate.decision, GateDecisionType::Blocked);
-        assert_eq!(gate.exit_code, 1);
-        assert!(gate.reasons.iter().any(|r| r.contains("κ")));
+    if !blockers.is_empty() {
+        return GateDecision { status: "blocked".into(), promote: false, reason: blockers[0].split(':').next().unwrap_or("blocked").to_string(), blockers, warnings };
     }
 
-    #[test]
-    fn test_gate_blocked_pending_review() {
-        let scores = make_test_scores(0.90, 0.87, 0.93);
-        let cal = make_test_calibration(0.95, 0.90, 1.0);
-        let gate = evaluate_gate(&scores, &cal, 3, 0.85, 0.85, 5);
-        assert!(!gate.promote);
-        assert_eq!(gate.decision, GateDecisionType::BlockedPendingReview);
-        assert_eq!(gate.exit_code, 1);
-        assert!(gate.reasons.iter().any(|r| r.contains("pending")));
-    }
-
-    #[test]
-    fn test_gate_uses_ci_lower_not_point() {
-        // Point estimate above target, but CI lower below - should BLOCK
-        let scores = make_test_scores(0.95, 0.80, 0.99); // CI lower = 0.80 < 0.85
-        let cal = make_test_calibration(0.95, 0.90, 1.0);
-        let gate = evaluate_gate(&scores, &cal, 0, 0.85, 0.85, 5);
-        assert!(!gate.promote);
-        assert!(gate.reasons.iter().any(|r| r.contains("micro-F1")));
-    }
+    GateDecision { status: "promote".into(), promote: true, reason: "all_checks_passed".into(), blockers, warnings }
 }

@@ -1,159 +1,222 @@
-//! Configuration types for slm-eval-infinity
+//! Evaluation config (ported from slm_eval/config.py, SPEC_V3 §8.3).
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use anyhow::Result;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EvalConfig {
-    pub run: RunConfig,
-    pub dataset: DatasetConfig,
-    pub model: ModelConfig,
-    pub judge: JudgeConfig,
-    pub split: SplitConfig,
-    pub scoring: ScoringConfig,
-    pub gate: GateConfig,
-    pub synthetic: Option<SyntheticConfig>,
-    pub review: Option<ReviewConfig>,
-    pub idiot_index: Option<IdiotIndexConfig>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegexValidator {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub pattern: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RunConfig {
-    pub run_id: String,
-    pub output_dir: PathBuf,
-    #[serde(default = "default_true")]
-    pub seal_holdout: bool,
-    #[serde(default)]
-    pub resume: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NumericValidator {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub tolerance: f64,
 }
 
-fn default_true() -> bool { true }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DatasetConfig {
-    pub path: PathBuf,
-    pub adapter: String, // "cord", "custom"
-    pub strata_key: Option<String>,
-    #[serde(default)]
-    pub quarantine_unextractable: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DateValidator {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub formats: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ModelConfig {
-    pub endpoint: String, // OpenAI-compatible endpoint
-    pub model: String,
-    #[serde(default)]
-    pub api_key_env: Option<String>,
-    #[serde(default = "default_temp")]
-    pub temperature: f32,
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
-    #[serde(default)]
-    pub json_mode: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StringValidator {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub normalize: Option<Vec<String>>,
 }
 
-fn default_temp() -> f32 { 0.0 }
-fn default_max_tokens() -> u32 { 2048 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ListValidator {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub item_match: Option<String>,
+}
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum FieldValidator {
+    #[serde(rename = "regex")]
+    Regex { pattern: String },
+    #[serde(rename = "numeric")]
+    Numeric { tolerance: f64 },
+    #[serde(rename = "date")]
+    Date { formats: Vec<String> },
+    #[serde(rename = "string")]
+    String { normalize: Option<Vec<String>> },
+    #[serde(rename = "list")]
+    List { item_match: Option<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FieldsConfig {
+    #[serde(default)]
+    pub subjective_fields: Vec<String>,
+    #[serde(default)]
+    pub exact_match_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validators: Option<BTreeMap<String, FieldValidator>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StrataConfig {
+    #[serde(default)]
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SplitConfig {
+    pub fraction: f64,
+    pub seed: i64,
+    pub strategy: String,
+}
+
+impl Default for SplitConfig {
+    fn default() -> Self {
+        Self { fraction: 0.2, seed: 42, strategy: "stratified".to_string() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatsConfig {
+    pub seed: i64,
+    pub resamples: usize,
+}
+
+impl Default for StatsConfig {
+    fn default() -> Self {
+        Self { seed: 42, resamples: 10_000 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThresholdsConfig {
+    pub target_f1: f64,
+    pub failure_threshold: f64,
+    pub min_per_stratum: usize,
+}
+
+impl Default for ThresholdsConfig {
+    fn default() -> Self {
+        Self { target_f1: 0.85, failure_threshold: 0.5, min_per_stratum: 50 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibrationConfig {
+    pub path: String,
+    pub min_pairs: usize,
+    pub target_kappa: f64,
+    pub recalibrate_every_rounds: usize,
+}
+
+impl Default for CalibrationConfig {
+    fn default() -> Self {
+        Self { path: "calibration/judge.jsonl".to_string(), min_pairs: 50, target_kappa: 0.85, recalibrate_every_rounds: 5 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct JudgeConfig {
     pub endpoint: String,
     pub model: String,
     pub api_key_env: String,
-    #[serde(default = "default_kappa_target")]
-    pub kappa_target: f64,
-    #[serde(default)]
-    pub calibration_file: Option<PathBuf>,
+    pub prompt_version: String,
+    pub calibration: CalibrationConfig,
 }
 
-fn default_kappa_target() -> f64 { 0.85 }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SplitConfig {
-    #[serde(default = "default_train_ratio")]
-    pub train_ratio: f64,
-    #[serde(default = "default_strata_mode")]
-    pub strata_mode: String, // "single_key"
-    #[serde(default)]
-    pub seed: u64,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    pub max_attempts: usize,
+    pub backoff_base: f64,
 }
 
-fn default_train_ratio() -> f64 { 0.8 }
-fn default_strata_mode() -> String { "single_key".to_string() }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ScoringConfig {
-    #[serde(default = "default_bootstrap")]
-    pub bootstrap_resamples: usize,
-    #[serde(default = "default_ci_level")]
-    pub ci_level: f64,
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self { max_attempts: 3, backoff_base: 2.0 }
+    }
 }
 
-fn default_bootstrap() -> usize { 1000 }
-fn default_ci_level() -> f64 { 0.95 }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct GateConfig {
-    pub micro_f1_target: f64,
-    pub kappa_target: f64,
-    pub min_strata_n: usize,
-    #[serde(default)]
-    pub thresholds: HashMap<String, serde_json::Value>,
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InferenceConfig {
+    pub backend: String,
+    pub base_url: String,
+    pub timeout_seconds: usize,
+    pub retry: RetryConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SyntheticConfig {
-    #[serde(default = "default_synthetic_rounds")]
-    pub max_rounds: usize,
-    #[serde(default = "default_propose_per_round")]
-    pub propose_per_round: usize,
-    #[serde(default = "default_minhash_threshold")]
-    pub minhash_threshold: f64,
-    #[serde(default)]
-    pub use_web_search: bool,
-    #[serde(default)]
-    pub web_provider: String, // "crw", "tavily", "searxng"
-    #[serde(default)]
-    pub web_api_key_env: Option<String>,
-    #[serde(default = "default_max_cost")]
+impl InferenceConfig {
+    fn default_backend() -> String { "llama_server".to_string() }
+    fn default_base_url() -> String { "http://127.0.0.1:8080/v1".to_string() }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HumanReviewConfig {
+    pub timeout_hours: i64,
+    pub notify: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CostControlConfig {
     pub max_cost_per_round_usd: f64,
-    #[serde(default = "default_alert_cost")]
     pub alert_at_usd: f64,
 }
 
-fn default_synthetic_rounds() -> usize { 2 }
-fn default_propose_per_round() -> usize { 20 }
-fn default_minhash_threshold() -> f64 { 0.6 }
-fn default_max_cost() -> f64 { 0.0 }
-fn default_alert_cost() -> f64 { 10.0 }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ReviewConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_auto_assign")]
-    pub auto_assign: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReportingConfig {
+    pub formats: Vec<String>,
 }
 
-fn default_auto_assign() -> bool { false }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct IdiotIndexConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub block_on_cuttable: bool,
-    #[serde(default = "default_warn_threshold")]
-    pub warn_threshold: usize,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalConfig {
+    pub task_description: String,
+    #[serde(default = "default_task_type")]
+    pub task_type: String,
+    pub fields: FieldsConfig,
+    pub strata: StrataConfig,
+    pub split: SplitConfig,
+    pub stats: StatsConfig,
+    pub thresholds: ThresholdsConfig,
+    pub judge: JudgeConfig,
+    pub inference: InferenceConfig,
+    pub human_review: HumanReviewConfig,
+    pub cost_control: CostControlConfig,
+    pub reporting: ReportingConfig,
 }
 
-fn default_warn_threshold() -> usize { 2 }
+fn default_task_type() -> String { "extraction".to_string() }
+
+impl Default for EvalConfig {
+    fn default() -> Self {
+        Self {
+            task_description: String::new(),
+            task_type: default_task_type(),
+            fields: FieldsConfig::default(),
+            strata: StrataConfig::default(),
+            split: SplitConfig::default(),
+            stats: StatsConfig::default(),
+            thresholds: ThresholdsConfig::default(),
+            judge: JudgeConfig::default(),
+            inference: InferenceConfig::default(),
+            human_review: HumanReviewConfig::default(),
+            cost_control: CostControlConfig::default(),
+            reporting: ReportingConfig::default(),
+        }
+    }
+}
 
 impl EvalConfig {
-    pub fn load(path: &PathBuf) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config: EvalConfig = toml::from_str(&content)?;
-        Ok(config)
+    pub fn from_yaml(path: &std::path::Path) -> Result<Self, anyhow::Error> {
+        let s = std::fs::read_to_string(path)?;
+        let cfg: EvalConfig = serde_yaml::from_str(&s)?;
+        Ok(cfg)
     }
 }

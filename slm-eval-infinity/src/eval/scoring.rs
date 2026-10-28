@@ -1,273 +1,313 @@
-//! Scoring logic: micro-F1, bootstrap CI, Cohen's κ
+//! Deterministic scoring: validators + element-level TP/FP/FN (SPEC_V3 §6.1, D-10).
 
-use anyhow::Result;
-use rand::seq::SliceRandom;
-use std::collections::{HashMap, HashSet};
+pub use crate::models::Metric;
+pub use crate::models::{FieldOutcome};
+use serde_json::Value;
+use std::collections::{BTreeMap, HashMap};
 
-use crate::models::{Case, Prediction, AggregateScores, FieldScore, StrataAggregate, CalibrationResult};
+pub const DEFAULT_NORMALIZE_OPS: &[&str] = &["trim", "collapse_ws"];
 
-pub fn score_predictions(cases: &[Case], predictions: &[Prediction], bootstrap_resamples: usize, ci_level: f64) -> Result<AggregateScores> {
-    // Build lookups
-    let case_map: HashMap<String, &Case> = cases.iter().map(|c| (c.case_id.clone(), c)).collect();
-    let pred_map: HashMap<String, &Prediction> = predictions.iter().map(|p| (p.case_id.clone(), p)).collect();
-
-    let mut all_field_counts: HashMap<String, (usize, usize, usize)> = HashMap::new(); // field -> (tp, fp, fn)
-    let mut strata_counts: HashMap<String, Vec<(usize, usize, usize)>> = HashMap::new(); // strata -> vec of (tp, fp, fn)
-    let mut dataset_defect = 0;
-    let mut evaluated = 0;
-
-    for (case_id, case) in &case_map {
-        let pred = match pred_map.get(case_id) {
-            Some(p) => p,
-            None => continue, // no prediction for this case
-        };
-
-        // Check quarantine
-        if case.ocr_signal.as_deref() == Some("unextractable") {
-            dataset_defect += 1;
-            continue;
+/// Normalize a string value by applying ops in order: trim, collapse_ws, casefold.
+pub fn normalize(value: &Option<String>, ops: &[String]) -> String {
+    let s = if let Some(v) = value { v.clone() } else { String::new() };
+    let trimmed = s.trim().to_string();
+    let mut result = trimmed;
+    if ops.iter().any(|o| o == "collapse_ws") {
+        let mut out = String::new();
+        let mut prev_space = false;
+        for c in result.chars() {
+            if c.is_whitespace() {
+                if !prev_space && !out.is_empty() { out.push(' '); }
+                prev_space = true;
+            } else { out.push(c); prev_space = false; }
         }
-
-        let gold = &case.gold;
-        let pred_gold = &pred.prediction;
-
-        // Compare all fields
-        let mut all_keys: HashSet<String> = HashSet::new();
-        for k in gold.extra.keys() { all_keys.insert(k.clone()); }
-        for k in pred_gold.extra.keys() { all_keys.insert(k.clone()); }
-        for k in ["merchant", "date", "total", "subtotal", "tax"] { all_keys.insert(k.to_string()); }
-
-        let strata_key = format!("{}:{}", case.strata.quality, case.strata.layout);
-        let mut strata_tpfpfn = Vec::new();
-
-        for key in all_keys {
-            let gold_val = get_gold_value(gold, &key);
-            let pred_val = get_pred_value(pred_gold, &key);
-
-            // Skip empty gold (dataset defect)
-            if gold_val.is_none() || gold_val.as_ref().map_or(true, |s| s.is_empty()) {
-                dataset_defect += 1;
-                continue;
-            }
-
-            let entry = all_field_counts.entry(key.clone()).or_insert((0, 0, 0));
-            let (tp, fp, fn_) = compare_values(&gold_val, &pred_val);
-            entry.0 += tp;
-            entry.1 += fp;
-            entry.2 += fn_;
-            strata_tpfpfn.push((tp, fp, fn_));
-        }
-
-        if !strata_tpfpfn.is_empty() {
-            strata_counts.entry(strata_key).or_default().extend(strata_tpfpfn);
-            evaluated += 1;
-        }
+        result = out.trim().to_string();
     }
+    let mut final_result = result;
+    if ops.iter().any(|o| o == "casefold") {
+        final_result = final_result.to_lowercase();
+    }
+    final_result
+}
 
-    // Also score items (nested array comparison)
-    // Simplified: treat each item as a field
-    for (case_id, case) in &case_map {
-        let pred = match pred_map.get(case_id) {
-            Some(p) => p,
-            None => continue,
-        };
+/// Parse a numeric value, tolerating currency formatting / separators.
+pub fn to_float(value: &Option<String>) -> Option<f64> {
+    let s = normalize(value, &[]);
+    if s.is_empty() { return None; }
+    let cleaned: String = s.chars().filter(|c| !",₹$€£ \t\r\n\u{a0}".contains(*c)).collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.starts_with('(') && cleaned.ends_with(')') {
+        let inner = cleaned[1..cleaned.len() - 1].trim().to_string();
+        let v = to_float(&Some(inner));
+        return v.map(|f| -f);
+    }
+    cleaned.parse::<f64>().ok()
+}
 
-        let gold_items = &case.gold.items;
-        let pred_items = &pred.prediction.items;
+#[derive(Debug, Clone)]
+pub enum Validator {
+    Regex { pattern: String },
+    Numeric { tolerance: f64 },
+    Date { formats: Vec<String> },
+    String { normalize: Vec<String> },
+    List,
+}
 
-        // Simple matching by name (position-independent)
-        for gitem in gold_items {
-            let mut matched = false;
-            for pitem in pred_items {
-                if pitem.name == gitem.name {
-                    // Compare price
-                    let (tp, fp, fn_) = compare_values(&Some(gitem.price.clone()), &Some(pitem.price.clone()));
-                    let entry = all_field_counts.entry("items.price".to_string()).or_insert((0, 0, 0));
-                    entry.0 += tp; entry.1 += fp; entry.2 += fn_;
-                    
-                    // Compare qty if present
-                    if gitem.qty.is_some() && pitem.qty.is_some() {
-                        let (tp, fp, fn_) = compare_values(
-                            &gitem.qty.map(|v| v.to_string()),
-                            &pitem.qty.map(|v| v.to_string()),
-                        );
-                        let entry = all_field_counts.entry("items.qty".to_string()).or_insert((0, 0, 0));
-                        entry.0 += tp; entry.1 += fp; entry.2 += fn_;
-                    }
-                    matched = true;
-                    break;
+impl Validator {
+    pub fn is_list(&self) -> bool { matches!(self, Validator::List) }
+}
+
+fn regex_full_match(pattern: &str, s: &str) -> bool {
+    match regex::Regex::new(&format!("^{}$", pattern)) {
+        Ok(re) => re.is_match(s),
+        Err(_) => false,
+    }
+}
+
+fn parse_date(_s: &str, formats: &[String]) -> Option<String> {
+    for f in formats {
+        let parts: Vec<&str> = f.split('-').collect();
+        if parts.len() == 3 {
+            if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>(), parts[2].parse::<i32>()) {
+                if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+                    return Some(format!("{}-{:02}-{:02}", y, m, d));
                 }
             }
-            if !matched {
-                // FN - gold item not predicted
-                let entry = all_field_counts.entry("items.price".to_string()).or_insert((0, 0, 0));
-                entry.2 += 1;
-            }
-        }
-
-        // FP - predicted items not in gold
-        for pitem in pred_items {
-            if !gold_items.iter().any(|g| g.name == pitem.name) {
-                let entry = all_field_counts.entry("items.price".to_string()).or_insert((0, 0, 0));
-                entry.1 += 1;
-            }
         }
     }
-
-    // Compute per-field F1
-    let mut per_field = HashMap::new();
-    let mut total_tp = 0;
-    let mut total_fp = 0;
-    let mut total_fn = 0;
-
-    for (field, (tp, fp, fn_)) in &all_field_counts {
-        let precision = if tp + fp > 0 { *tp as f64 / (*tp + *fp) as f64 } else { 0.0 };
-        let recall = if tp + fn_ > 0 { *tp as f64 / (*tp + *fn_) as f64 } else { 0.0 };
-        let f1 = if precision + recall > 0.0 { 2.0 * precision * recall / (precision + recall) } else { 0.0 };
-        per_field.insert(field.clone(), FieldScore {
-            tp: *tp, fp: *fp, fn_: *fn_, precision, recall, f1
-        });
-        total_tp += tp;
-        total_fp += fp;
-        total_fn += fn_;
-    }
-
-    // Overall micro-F1
-    let micro_f1 = if total_tp + total_fp + total_fn > 0 {
-        let p = total_tp as f64 / (total_tp + total_fp) as f64;
-        let r = total_tp as f64 / (total_tp + total_fn) as f64;
-        if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 }
-    } else { 0.0 };
-
-    // Bootstrap CI
-    let (ci_lower, ci_upper) = bootstrap_ci(cases, predictions, bootstrap_resamples, ci_level)?;
-
-    // Per-strata
-    let mut per_strata = HashMap::new();
-    for (strata_key, scores) in strata_counts {
-        let (tp, fp, fn_) = scores.iter().fold((0,0,0), |a, b| (a.0+b.0, a.1+b.1, a.2+b.2));
-        let f1 = if tp + fp + fn_ > 0 {
-            let p = tp as f64 / (tp + fp).max(1) as f64;
-            let r = tp as f64 / (tp + fn_).max(1) as f64;
-            if p + r > 0.0 { 2.0 * p * r / (p + r) } else { 0.0 }
-        } else { 0.0 };
-        
-        let n = scores.len();
-        let se = if n > 0 { (f1 * (1.0 - f1) / n as f64).sqrt() } else { 0.0 };
-        let z = 1.96; // 95%
-        let parts: Vec<_> = strata_key.split(':').collect();
-        let quality = parts.get(0).copied().unwrap_or("medium").to_string();
-        
-        per_strata.insert(strata_key, StrataAggregate {
-            n, micro_f1: f1,
-            ci_lower: (f1 - z * se).max(0.0),
-            ci_upper: (f1 + z * se).min(1.0),
-            quality,
-        });
-    }
-
-    Ok(AggregateScores {
-        micro_f1,
-        ci_lower,
-        ci_upper,
-        per_field,
-        per_strata,
-        dataset_defect,
-        total_cases: cases.len(),
-        evaluated_cases: evaluated,
-    })
+    None
 }
 
-fn get_gold_value(gold: &crate::models::GoldStandard, key: &str) -> Option<String> {
-    match key {
-        "merchant" => gold.merchant.clone(),
-        "date" => gold.date.clone(),
-        "total" => gold.total.clone(),
-        "subtotal" => gold.subtotal.clone(),
-        "tax" => gold.tax.clone(),
-        _ => gold.extra.get(key).and_then(|v| v.as_str().map(|s| s.to_string())),
+fn item_key(v: &Value) -> String {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<String> = map.keys().cloned().collect();
+            keys.sort();
+            let mut parts = Vec::new();
+            for k in &keys {
+                if let Some(val) = map.get(k) {
+                    parts.push(format!("{}={}", k, val.as_str().unwrap_or(&format!("{}", val))));
+                }
+            }
+            parts.join("|")
+        }
+        _ => v.as_str().map(|s| s.to_string()).unwrap_or_else(|| format!("{}", v)),
     }
 }
 
-fn get_pred_value(gold: &crate::models::GoldStandard, key: &str) -> Option<String> {
-    get_gold_value(gold, key) // same structure
-}
-
-fn compare_values(gold: &Option<String>, pred: &Option<String>) -> (usize, usize, usize) {
-    match (gold, pred) {
-        (Some(g), Some(p)) if g == p => (1, 0, 0), // TP
-        (Some(_), Some(_)) => (0, 1, 0), // FP
-        (Some(_), None) => (0, 0, 1), // FN
-        (None, Some(_)) => (0, 1, 0), // FP
-        (None, None) => (0, 0, 0), // TN (ignored)
+/// Score one field. Returns (tp, fp, fn).
+pub fn score_field(
+    pred: &Option<Value>,
+    gold: &Option<Value>,
+    validator: &Option<Validator>,
+) -> (u32, u32, u32) {
+    let gold_list = gold.as_ref().map(|g| g.is_array()).unwrap_or(false);
+    if validator.as_ref().map(|v| v.is_list()).unwrap_or(false) || gold_list {
+        return list_outcome(pred, gold);
+    }
+    let pred_s = pred.as_ref().and_then(|v| v.as_str()).map(|s| s.to_string());
+    let gold_s = gold.as_ref().and_then(|v| v.as_str()).map(|s| s.to_string());
+    match validator {
+        Some(Validator::Regex { pattern }) => {
+            if let (Some(p), Some(g)) = (&pred_s, &gold_s) {
+                if p == g && regex_full_match(pattern, &p) {
+                    return (1, 0, 0);
+                }
+            }
+            return (0, 1, 1);
+        }
+        Some(Validator::Numeric { tolerance }) => {
+            if let (Some(p), Some(g)) = (to_float(&pred_s), to_float(&gold_s)) {
+                if (p - g).abs() <= *tolerance { return (1, 0, 0); }
+            }
+            return (0, 1, 1);
+        }
+        Some(Validator::Date { formats }) => {
+            if let (Some(p), Some(g)) = (pred_s.as_deref().and_then(|s| parse_date(s, &formats)), gold_s.as_deref().and_then(|s| parse_date(s, &formats))) {
+                if p == g { return (1, 0, 0); }
+            }
+            return (0, 1, 1);
+        }
+        Some(Validator::String { normalize: ops }) => {
+            let p = pred_s.as_deref().map(|s| normalize(&Some(s.to_string()), ops));
+            let g = gold_s.as_deref().map(|s| normalize(&Some(s.to_string()), ops));
+            if p == g { return (1, 0, 0); }
+            return (0, 1, 1);
+        }
+        _ => {
+            let p = pred_s.as_deref().map(|s| normalize(&Some(s.to_string()), &[]));
+            let g = gold_s.as_deref().map(|s| normalize(&Some(s.to_string()), &[]));
+            if p == g { return (1, 0, 0); }
+            return (0, 1, 1);
+        }
     }
 }
 
-fn bootstrap_ci(cases: &[Case], predictions: &[Prediction], n_resamples: usize, ci_level: f64) -> Result<(f64, f64)> {
-    if cases.is_empty() {
-        return Ok((0.0, 0.0));
+fn list_outcome(pred: &Option<Value>, gold: &Option<Value>) -> (u32, u32, u32) {
+    let pred_items: Vec<String> = match pred {
+        Some(Value::Array(arr)) => arr.iter().map(|v| item_key(v)).collect(),
+        Some(v) => vec![item_key(v)],
+        None => vec![],
+    };
+    let gold_items: Vec<String> = match gold {
+        Some(Value::Array(arr)) => arr.iter().map(|v| item_key(v)).collect(),
+        Some(v) => vec![item_key(v)],
+        None => vec![],
+    };
+    let mut remaining = gold_items.clone();
+    let mut tp = 0u32;
+    for p in &pred_items {
+        if let Some(pos) = remaining.iter().position(|x| *x == *p) {
+            remaining.remove(pos);
+            tp += 1;
+        }
     }
-
-    let case_ids: Vec<_> = cases.iter().map(|c| c.case_id.clone()).collect();
-    let mut rng = rand::thread_rng();
-    let mut f1_scores = Vec::with_capacity(n_resamples);
-
-    for _ in 0..n_resamples {
-        // Resample with replacement
-        let sample: Vec<_> = (0..case_ids.len())
-            .map(|_| case_ids.choose(&mut rng).unwrap())
-            .collect();
-        
-        // Build sampled cases/predictions
-        let sampled_cases: Vec<_> = sample.iter().filter_map(|id| cases.iter().find(|c| &c.case_id == *id)).cloned().collect();
-        let sampled_preds: Vec<_> = sample.iter().filter_map(|id| predictions.iter().find(|p| &p.case_id == *id)).cloned().collect();
-        
-        let result = score_predictions(&sampled_cases, &sampled_preds, 0, 0.0)?; // no nested bootstrap
-        f1_scores.push(result.micro_f1);
-    }
-
-    f1_scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let alpha = (1.0 - ci_level) / 2.0;
-    let lower_idx = (alpha * n_resamples as f64).floor() as usize;
-    let upper_idx = ((1.0 - alpha) * n_resamples as f64).ceil() as usize;
-    
-    Ok((
-        f1_scores[lower_idx.min(f1_scores.len() - 1)],
-        f1_scores[upper_idx.min(f1_scores.len() - 1)],
-    ))
+    let fp = (pred_items.len() - tp as usize) as u32;
+    let fn_ = (remaining.len()) as u32;
+    (tp, fp, fn_)
 }
 
-/// Cohen's κ for judge calibration
-pub fn cohens_kappa(agreements: &[(bool, bool)], n_classes: usize) -> CalibrationResult {
-    let n = agreements.len();
-    if n == 0 {
-        return CalibrationResult {
-            kappa: 0.0, ci_lower: 0.0, ci_upper: 0.0,
-            n_pairs: 0, n_agree: 0, n_disagree: 0,
-        };
+/// Score one case across configured exact-match fields. Returns outcomes.
+pub fn score_case(
+    case_id: &str,
+    prediction: &Option<Value>,
+    gold: &Option<Value>,
+    exact_fields: &[String],
+    subjective_fields: &[String],
+    judge_labels: &Option<HashMap<String, bool>>,
+) -> Vec<FieldOutcome> {
+    let mut outcomes = Vec::new();
+    let mut fields = BTreeMap::new();
+    if let Some(p) = prediction {
+        if let Some(obj) = p.as_object() {
+            for (k, v) in obj {
+                fields.insert(k.clone(), v.clone());
+            }
+        }
     }
-
-    let n_agree = agreements.iter().filter(|(a, b)| a == b).count();
-    let n_disagree = n - n_agree;
-    let po = n_agree as f64 / n as f64;
-
-    // Expected agreement by chance (assuming balanced)
-    let pe = 1.0 / n_classes as f64;
-    
-    let kappa = if 1.0 - pe > 0.0 { (po - pe) / (1.0 - pe) } else { 0.0 };
-
-    // CI using Fleiss-Cohen approximation
-    let se = ((po * (1.0 - po)) / (n as f64 * (1.0 - pe).powi(2))).sqrt();
-    let z = 1.96; // 95%
-    let ci_lower = (kappa - z * se).max(-1.0);
-    let ci_upper = (kappa + z * se).min(1.0);
-
-    CalibrationResult {
-        kappa,
-        ci_lower,
-        ci_upper,
-        n_pairs: n,
-        n_agree,
-        n_disagree,
+    for fname in exact_fields {
+        let pred = fields.get(fname).cloned();
+        let gold_v = gold.as_ref().and_then(|g| g.get(fname).cloned());
+        let validator = None;
+        let (tp, fp, fn_) = score_field(&pred, &gold_v, &validator);
+        outcomes.push(FieldOutcome::new(case_id.to_string(), tp, fp, fn_));
     }
+    for fname in subjective_fields {
+        let ok = judge_labels.as_ref().and_then(|m| m.get(fname)).copied().unwrap_or(false);
+        let (tp, fp, fn_) = if ok { (1, 0, 0) } else { (0, 1, 1) };
+        outcomes.push(FieldOutcome::new(case_id.to_string(), tp, fp, fn_));
+    }
+    outcomes
+}
+
+/// Element-level micro-F1: ΣTP / (ΣTP + ΣFP + ΣFN). Undefined denominators score 0.0.
+pub fn micro_f1(outcomes: &[FieldOutcome]) -> f64 {
+    let mut tp = 0u64;
+    let mut fp = 0u64;
+    let mut fn_ = 0u64;
+    for o in outcomes {
+        tp += o.tp as u64;
+        fp += o.fp as u64;
+        fn_ += o.fn_ as u64;
+    }
+    let denom = tp + fp + fn_;
+    if denom == 0 { return 0.0; }
+    tp as f64 / denom as f64
+}
+
+/// Deterministic PRNG (LCG) for bootstrap resampling.
+struct Lcg { state: u64 }
+impl Lcg {
+    fn new(seed: u64) -> Self { Self { state: seed.max(1) } }
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state >> 33
+    }
+    fn next_usize(&mut self, n: usize) -> usize {
+        (self.next_u64() as usize) % n.max(1)
+    }
+}
+
+/// Percentile bootstrap over cases (SPEC_V3 §6.5).
+pub fn bootstrap_micro_f1(outcomes: &[FieldOutcome], resamples: usize, seed: u64, alpha: f64) -> Metric {
+    if outcomes.is_empty() {
+        return Metric { point: 0.0, ci_lower: 0.0, ci_upper: 0.0, n: 0, resamples };
+    }
+    let mut by_case: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
+    for o in outcomes {
+        let e = by_case.entry(o.case_id.clone()).or_insert((0, 0, 0));
+        e.0 += o.tp as u64;
+        e.1 += o.fp as u64;
+        e.2 += o.fn_ as u64;
+    }
+    let case_ids: Vec<String> = by_case.keys().cloned().collect();
+    let n = case_ids.len();
+    let point = micro_f1(outcomes);
+    let mut rng = Lcg::new(seed);
+    let mut samples: Vec<f64> = Vec::with_capacity(resamples);
+    for _ in 0..resamples {
+        let idx: Vec<usize> = (0..n).map(|_| rng.next_usize(n)).collect();
+        let mut tp_s = 0u64; let mut fp_s = 0u64; let mut fn_s = 0u64;
+        for &i in &idx { let e = by_case.get(&case_ids[i]).copied().unwrap_or((0,0,0)); tp_s += e.0; fp_s += e.1; fn_s += e.2; }
+        let denom = tp_s + fp_s + fn_s;
+        let v = if denom > 0 { tp_s as f64 / denom as f64 } else { 0.0 };
+        samples.push(v);
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut lo = 0.0; let mut hi = 1.0;
+    if !samples.is_empty() {
+        let pos_lo = ((samples.len() as f64) * alpha / 2.0).floor() as usize;
+        let pos_hi = ((samples.len() as f64) * (1.0 - alpha / 2.0)).ceil() as usize;
+        lo = samples[pos_lo.min(samples.len() - 1)];
+        hi = samples[pos_hi.min(samples.len() - 1)];
+    }
+    Metric { point, ci_lower: lo, ci_upper: hi, n, resamples }
+}
+
+/// Cohen's κ between two label sequences (D-04).
+pub fn cohen_kappa(a: &[String], b: &[String]) -> f64 {
+    if a.len() != b.len() { return f64::NAN; }
+    let n = a.len();
+    if n == 0 { return f64::NAN; }
+    let mut labels: Vec<String> = a.to_vec();
+    labels.extend_from_slice(b);
+    labels.sort();
+    labels.dedup();
+    let k = labels.len();
+    if k < 2 { return f64::NAN; }
+    let idx: HashMap<&str, usize> = labels.iter().enumerate().map(|(i, l)| (l.as_str(), i)).collect();
+    let mut confusion = vec![vec![0i64; k]; k];
+    for i in 0..n {
+        let x = *idx.get(a[i].as_str()).unwrap_or(&0);
+        let y = *idx.get(b[i].as_str()).unwrap_or(&0);
+        confusion[x][y] += 1;
+    }
+    let p_o: f64 = (0..k).map(|i| (0..k).map(|j| confusion[i][j] as f64).sum::<f64>()).sum::<f64>() / n as f64;
+    let mut row_marg = vec![0.0f64; k];
+    let mut col_marg = vec![0.0f64; k];
+    for i in 0..k { row_marg[i] = (0..k).map(|j| confusion[i][j] as f64).sum::<f64>() / n as f64; }
+    for j in 0..k { col_marg[j] = (0..k).map(|i| confusion[i][j] as f64).sum::<f64>() / n as f64; }
+    let p_e: f64 = row_marg.iter().zip(col_marg.iter()).map(|(r, c)| r * c).sum::<f64>();
+    if p_e == 1.0 { return f64::NAN; }
+    (p_o - p_e) / (1.0 - p_e)
+}
+
+/// Percentile bootstrap CI on κ (§6.4).
+pub fn kappa_ci(a: &[String], b: &[String], resamples: usize, seed: u64, alpha: f64) -> (f64, f64) {
+    if a.len() != b.len() || a.is_empty() { return (f64::NAN, f64::NAN); }
+    let n = a.len();
+    let mut vals: Vec<f64> = Vec::new();
+    let mut rng = Lcg::new(seed);
+    for _ in 0..resamples {
+        let idx: Vec<usize> = (0..n).map(|_| rng.next_usize(n)).collect();
+        let aa: Vec<String> = idx.iter().map(|&i| a[i].clone()).collect();
+        let bb: Vec<String> = idx.iter().map(|&i| b[i].clone()).collect();
+        let k = cohen_kappa(&aa, &bb);
+        if !k.is_nan() { vals.push(k); }
+    }
+    if vals.is_empty() { return (f64::NAN, f64::NAN); }
+    vals.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    let pos_lo = ((vals.len() as f64) * alpha / 2.0).floor() as usize;
+    let pos_hi = ((vals.len() as f64) * (1.0 - alpha / 2.0)).ceil() as usize;
+    (vals[pos_lo.min(vals.len() - 1)], vals[pos_hi.min(vals.len() - 1)])
 }
