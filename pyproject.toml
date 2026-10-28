@@ -15,6 +15,7 @@ dependencies = [
     "numpy",
     "datasketch",
     "pyyaml",
+    "jinja2",
 ]
 
 [project.scripts]

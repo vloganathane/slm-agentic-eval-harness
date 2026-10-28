@@ -19,6 +19,7 @@ slm_eval.db
 runs/
 *.gguf
 .env
+.infinity/
 
 # Local inputs (datasets, calibration labels)
 data/

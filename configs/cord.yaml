@@ -45,8 +45,8 @@ human_review:
   timeout_hours: 0
   notify: []
 cost_control:
-  max_cost_per_round_usd: 0.0
-  alert_at_usd: 0.0
+  max_cost_per_round_usd: 10.0
+  alert_at_usd: 5.0
 reporting:
   formats:
   - json

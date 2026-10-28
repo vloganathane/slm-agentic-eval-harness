@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS proposal (
   state TEXT, created_at TEXT,
   UNIQUE (run_id, round, agent, kind, payload)
 );
+CREATE TABLE IF NOT EXISTS error_category (
+  id INTEGER PRIMARY KEY, run_id TEXT, case_id TEXT, field TEXT,
+  category TEXT, subcategory TEXT, confidence REAL, reviewer TEXT, created_at TEXT,
+  UNIQUE (run_id, case_id, field, category)
+);
+CREATE TABLE IF NOT EXISTS review_comment (
+  id INTEGER PRIMARY KEY, run_id TEXT, case_id TEXT, reason TEXT,
+  reviewer TEXT, comment TEXT, created_at TEXT
+);
 """
 
 VALID_RUN_STATUSES = ("created", "running", "completed", "failed")
@@ -247,6 +256,101 @@ class Store:
             (run_id,),
         ).fetchone()
         return int(row["n"])
+
+    def insert_review_tasks(self, run_id: str, rows: list[dict[str, Any]]) -> int:
+        """Insert review tasks (idempotent by case_id + reason)."""
+        cur = self._conn.executemany(
+            """INSERT OR IGNORE INTO review_task
+               (run_id, case_id, reason, state, assigned_at, due_at, decided_at, decision, notes)
+               VALUES (?, ?, ?, 'pending', ?, ?, NULL, NULL, '')""",
+            [(r["run_id"], r["case_id"], r["reason"], r.get("assigned_at", _now()), r.get("due_at")) for r in rows],
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def get_review_tasks(self, run_id: str, state: str | None = None) -> list[dict[str, Any]]:
+        if state:
+            rows = self._conn.execute(
+                "SELECT * FROM review_task WHERE run_id = ? AND state = ? ORDER BY assigned_at",
+                (run_id, state),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM review_task WHERE run_id = ? ORDER BY assigned_at",
+                (run_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_review_task(self, run_id: str, case_id: str, reason: str,
+                           decision: str, notes: str = "") -> None:
+        self._conn.execute(
+            """UPDATE review_task SET state = 'decided', decided_at = ?, decision = ?, notes = ?
+               WHERE run_id = ? AND case_id = ? AND reason = ?""",
+            (_now(), decision, notes, run_id, case_id, reason),
+        )
+        self._conn.commit()
+
+    def reopen_review_task(self, run_id: str, case_id: str, reason: str) -> None:
+        self._conn.execute(
+            """UPDATE review_task SET state = 'pending', decided_at = NULL, decision = NULL
+               WHERE run_id = ? AND case_id = ? AND reason = ?""",
+            (run_id, case_id, reason),
+        )
+        self._conn.commit()
+
+    # -- error categorization (analyst lane) -----------------------------------
+
+    def insert_error_category(
+        self, run_id: str, case_id: str, field: str, category: str,
+        subcategory: str = "", confidence: float = 1.0, reviewer: str = ""
+    ) -> bool:
+        """Record an error category. Returns True if new, False if duplicate."""
+        cur = self._conn.execute(
+            """INSERT OR IGNORE INTO error_category
+               (run_id, case_id, field, category, subcategory, confidence, reviewer, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, case_id, field, category, subcategory, confidence, reviewer, _now()),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_error_categories(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM error_category WHERE run_id = ? ORDER BY created_at", (run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_error_summary(self, run_id: str) -> dict[str, int]:
+        """Aggregate counts by category."""
+        rows = self._conn.execute(
+            "SELECT category, COUNT(*) as n FROM error_category WHERE run_id = ? GROUP BY category",
+            (run_id,),
+        ).fetchall()
+        return {r["category"]: r["n"] for r in rows}
+
+    # -- review comments ---------------------------------------------------------
+
+    def add_review_comment(
+        self, run_id: str, case_id: str, reason: str, reviewer: str, comment: str
+    ) -> None:
+        self._conn.execute(
+            """INSERT INTO review_comment (run_id, case_id, reason, reviewer, comment, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (run_id, case_id, reason, reviewer, comment, _now()),
+        )
+        self._conn.commit()
+
+    def get_review_comments(self, run_id: str, case_id: str | None = None) -> list[dict[str, Any]]:
+        if case_id:
+            rows = self._conn.execute(
+                "SELECT * FROM review_comment WHERE run_id = ? AND case_id = ? ORDER BY created_at",
+                (run_id, case_id),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM review_comment WHERE run_id = ? ORDER BY created_at", (run_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # -- proposals (advisory lane, §7.2) --------------------------------------
 

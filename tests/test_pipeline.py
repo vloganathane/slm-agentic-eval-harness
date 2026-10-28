@@ -63,6 +63,13 @@ def _run(tmp_path, dataset, run_id, predictions=None, resume=False, cfg=CFG):
             cfg, store, tmp_path / "runs" / run_id, _judge_client(),
             code_version="git:fixture", resume=resume,
         )
+        if predictions is None:
+            # Fixture dev loop: the fixture's own gold plays the perfect model.
+            # Explicit — the pipeline never substitutes gold implicitly, because
+            # a resumed run with gold stand-ins would fabricate a perfect score.
+            predictions = {
+                c["case_id"]: c["gold"] for c in fixture.read_dataset(dataset)
+            }
         return orch.run(
             model_path="fixture.gguf", model_sha256="m" * 64,
             dataset_path=dataset, predictions=predictions, calibration=GOOD_CAL,

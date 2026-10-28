@@ -2,7 +2,7 @@
 
 import pytest
 
-from slm_eval.config import EvalConfig
+from slm_eval.config import EvalConfig, NumericValidator
 from slm_eval.scoring import normalize, score_case, score_field
 
 VALIDATORS = {
@@ -115,3 +115,26 @@ def test_score_case_missing_judge_label_counts_incorrect():
     outcomes = score_case("c1", pred, gold, cfg, judge_labels=None)
     subj = [o for o in outcomes if o.case_id == "c1"][-1]
     assert subj.fp == 1 and subj.fn == 1  # conservative: no verdict → incorrect
+
+
+@pytest.mark.parametrize(
+    "pred,gold,expected_match",
+    [
+        # currency separators / symbols must not break numeric equality
+        ("45,500", "45,500", True),
+        ("45500", "45,500", True),
+        ("45,500", "45500", True),
+        ("$45,500", "45,500", True),
+        ("45,500.00", "45500", True),
+        ("₹1,234.50", "1234.5", True),
+        ("(1,500)", "-1500", True),
+        # genuinely different values still miss
+        ("45,000", "45,500", False),
+        ("45,501", "45,500", False),
+        ("abc", "45,500", False),
+        ("", "45,500", False),
+    ],
+)
+def test_numeric_validator_tolerates_currency_formatting(pred, gold, expected_match):
+    tp, fp, fn = score_field(pred, gold, NumericValidator(tolerance=0.0))
+    assert bool(tp) is expected_match

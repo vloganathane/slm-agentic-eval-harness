@@ -7,11 +7,25 @@ Two real backends behind one protocol so the orchestrator never imports
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+try:
+    import httpx
+    HAS_HTTPX = True
+except ImportError:
+    HAS_HTTPX = False
+
+try:
+    from tavily import TavilyClient
+    HAS_TAVILY = True
+except ImportError:
+    HAS_TAVILY = False
 
 
 @dataclass(frozen=True)
@@ -25,7 +39,79 @@ class LLMResponse:
 
 @runtime_checkable
 class LLMClient(Protocol):
-    def complete(self, prompt: str, *, json_mode: bool = False) -> LLMResponse: ...
+    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse: ...
+    def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]: ...
+
+
+class WebSearchProvider:
+    """Web search provider for real-world data fetching."""
+    
+    def __init__(self, provider: str = "tavily", api_key: str | None = None):
+        self.provider = provider
+        self.api_key = api_key or os.environ.get(f"{provider.upper()}_API_KEY")
+        self._client = None
+        
+        if provider == "tavily" and HAS_TAVILY and self.api_key:
+            self._client = TavilyClient(api_key=self.api_key)
+        elif provider == "crw":
+            # crw is a CLI tool - check if it's available
+            self._client = self._check_crw_available()
+    
+    def _check_crw_available(self) -> bool:
+        """Check if crw CLI is available."""
+        try:
+            result = subprocess.run(["crw", "--version"], capture_output=True, timeout=5)
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+    
+    def search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        if self.provider == "tavily" and self._client:
+            try:
+                results = self._client.search(query, max_results=max_results)
+                return [
+                    {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", "")}
+                    for r in results.get("results", [])
+                ]
+            except Exception:
+                pass
+        elif self.provider == "crw" and self._client:
+            try:
+                # crw search CLI: crw search "query" --json --limit N
+                cmd = ["crw", "search", query, "--json", "--limit", str(max_results), "--format", "json"]
+                env = os.environ.copy()
+                if self.api_key:
+                    env["CRW_API_KEY"] = self.api_key
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+                if result.returncode == 0 and result.stdout.strip():
+                    data = json.loads(result.stdout)
+                    # crw returns JSON array or object with results
+                    if isinstance(data, list):
+                        return [
+                            {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("snippet", r.get("content", ""))}
+                            for r in data
+                        ]
+                    elif isinstance(data, dict) and "results" in data:
+                        return [
+                            {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("snippet", r.get("content", ""))}
+                            for r in data["results"]
+                        ]
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+                pass
+        # Fallback to simple HTTP fetch if no provider
+        return []
+    
+    def fetch(self, url: str) -> str:
+        if not HAS_HTTPX:
+            return ""
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.text[:5000]  # Limit size
+        except Exception:
+            return ""
 
 
 class OpenAICompatClient:
@@ -49,7 +135,7 @@ class OpenAICompatClient:
         self._max_attempts = max_attempts
         self._backoff_base = backoff_base
 
-    def complete(self, prompt: str, *, json_mode: bool = False) -> LLMResponse:
+    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse:
         retryer = retry(
             stop=stop_after_attempt(self._max_attempts),
             wait=wait_exponential(multiplier=self._backoff_base),
@@ -58,7 +144,13 @@ class OpenAICompatClient:
         kwargs: dict[str, Any] = {"model": self._model, "messages": [{"role": "user", "content": prompt}]}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if temperature > 0:
+            kwargs["temperature"] = temperature
         return retryer(prompt, kwargs)
+
+    def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        """Default implementation - no web search. Override with WebSearchProvider."""
+        return []
 
     def _once(self, prompt: str, kwargs: dict[str, Any]) -> LLMResponse:
         start = time.monotonic()
@@ -85,9 +177,12 @@ class FixtureJudge:
     the κ calibration gate (§6.4) is what makes a judge trustworthy.
     """
 
-    def complete(self, prompt: str, *, json_mode: bool = False) -> LLMResponse:
+    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse:
         text = json.dumps({"verdict": "match", "reason": "fixture judge"})
         return LLMResponse(text=text, tokens_in=len(prompt) // 4, tokens_out=len(text) // 4)
+    
+    def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        return []
 
 
 class ScriptedClient:
@@ -98,10 +193,13 @@ class ScriptedClient:
         self._default = default
         self.calls: list[str] = []
 
-    def complete(self, prompt: str, *, json_mode: bool = False) -> LLMResponse:
+    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse:
         self.calls.append(prompt)
         text = self._responses.get(prompt, self._default)
         return LLMResponse(text=text, tokens_in=len(prompt) // 4, tokens_out=len(text) // 4)
+    
+    def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        return []
 
 
 def parse_json_response(text: str) -> dict[str, Any]:
@@ -122,3 +220,50 @@ def parse_json_response(text: str) -> dict[str, Any]:
     if not isinstance(obj, dict):
         raise ValueError("expected JSON object")
     return obj
+
+
+class WebEnabledClient(OpenAICompatClient):
+    """OpenAI-compatible client with web search capability for synthetic generation."""
+    
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        timeout: int = 120,
+        max_attempts: int = 3,
+        backoff_base: float = 2.0,
+        usd_per_1k_tokens: float = 0.0,
+        web_search_provider: str = "tavily",
+        web_search_api_key: str | None = None,
+    ) -> None:
+        super().__init__(
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            backoff_base=backoff_base,
+            usd_per_1k_tokens=usd_per_1k_tokens,
+        )
+        self._web_search = WebSearchProvider(web_search_provider, web_search_api_key)
+    
+    def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        return self._web_search.search(query, max_results)
+    
+    def web_fetch(self, url: str) -> str:
+        return self._web_search.fetch(url)
+
+
+class WebEnabledFixtureClient(FixtureJudge):
+    """Fixture client with mock web search for testing."""
+    
+    def __init__(self, mock_results: dict[str, list[dict[str, str]]] | None = None):
+        self._mock_results = mock_results or {}
+    
+    def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        # Simple keyword matching for mock results
+        for key, results in self._mock_results.items():
+            if key.lower() in query.lower():
+                return results[:max_results]
+        return []

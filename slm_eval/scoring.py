@@ -44,16 +44,39 @@ def _parse_date(value: Any, formats: list[str]) -> str | None:
     return None
 
 
+_CURRENCY_NOISE = re.compile(r"[,\s₹$€£]")
+
+
+def _to_float(value: Any) -> float | None:
+    """Parse a numeric value, tolerating currency formatting.
+
+    Real invoice amounts arrive as ``"45,500"``, ``"$1,234.50"``, ``"₹ 999"``.
+    ``float()`` chokes on the thousands separators and currency symbols, so strip
+    them first. Returns None if the result isn't a parseable number.
+    """
+    s = normalize(value)
+    if s == "":
+        return None
+    s = _CURRENCY_NOISE.sub("", s)
+    # Parenthesised negatives: "(1,500)" -> -1500
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
 def _scalar_equal(pred: Any, gold: Any, validator: Any) -> bool:
     if isinstance(validator, RegexValidator):
         return re.fullmatch(validator.pattern, normalize(pred)) is not None and normalize(
             pred
         ) == normalize(gold)
     if isinstance(validator, NumericValidator):
-        try:
-            return abs(float(pred) - float(gold)) <= validator.tolerance
-        except (TypeError, ValueError):
+        pv, gv = _to_float(pred), _to_float(gold)
+        if pv is None or gv is None:
             return False
+        return abs(pv - gv) <= validator.tolerance
     if isinstance(validator, DateValidator):
         pg, gg = _parse_date(pred, validator.formats), _parse_date(gold, validator.formats)
         return pg is not None and pg == gg

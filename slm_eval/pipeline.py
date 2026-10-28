@@ -12,12 +12,12 @@ import time
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from slm_eval import fixture
 from slm_eval.config import EvalConfig
 from slm_eval.errors import ConfigError, LeakageError, SlmEvalError
-from slm_eval.gate import GateInputs, StratumResult, decide_gate
+from slm_eval.gate import GateInputs, StratumResult, dataset_defect_rate, decide_gate
 from slm_eval.hashing import sha256_json
 from slm_eval.judge import CalibrationGate, CalibrationStatus, Judge
 from slm_eval.llm import LLMClient
@@ -96,11 +96,14 @@ class Orchestrator:
         dataset_path: str,
         predictions: dict[str, dict[str, Any]] | None = None,
         calibration: CalibrationStatus | None = None,
+        predictor: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Run stages 1–7. Returns the gate.json payload.
 
-        ``predictions`` maps case_id → predicted fields. In M1 the caller supplies
-        them (or the fixture's gold as a stand-in for a live inference server).
+        ``predictions`` maps case_id → predicted fields (test/fixture callers).
+        ``predictor`` is called per holdout case during the infer stage when no
+        prediction was supplied — this is how a live model under test is wired in
+        without leaking train data or duplicating the split logic.
         """
         cfg_hash = self.cfg.config_hash
         if self.store.get_run_safe(self.run_id) is None:
@@ -145,25 +148,62 @@ class Orchestrator:
                 raise
 
         holdout = split.holdout
-        preds = predictions or {c["case_id"]: c["gold"] for c in holdout}
+
+        # --- dataset defect quarantine (§2) ---
+        # Cases whose input carries no signal (blank/garbage OCR) are excluded
+        # from the micro-F1 denominator — a broken input is not a weak model.
+        # The gate reports them separately as `dataset_defect`.
+        signal_values = [
+            str(c.get("strata", {}).get("ocr_signal", "usable")) for c in holdout
+        ]
+        defect_rate, defect_n = dataset_defect_rate(signal_values)
+        usable_holdout = [
+            c for c in holdout
+            if str(c.get("strata", {}).get("ocr_signal", "usable")) == "usable"
+        ]
+
+        # Real predictions only: explicit (tests/fixture callers), resumed from a
+        # prior partial run's predictions.jsonl, or produced live by ``predictor``.
+        # Gold-as-prediction is NEVER used implicitly — resuming a crashed run with
+        # gold stand-ins would fabricate a perfect score.
+        preds: dict[str, dict[str, Any]] = dict(predictions or {})
+        preds_file = self.run_dir / "predictions.jsonl"
+        if preds_file.exists():
+            for line in preds_file.read_text().splitlines():
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                if "case_id" in rec:
+                    preds[rec["case_id"]] = rec["prediction"]
 
         # --- infer (stage 3) ---
         h_infer = sha256_json({"holdout": split.holdout_hash, "model": model_sha256})
         if self._begin("infer", h_infer):
-            missing = [c["case_id"] for c in holdout if c["case_id"] not in preds]
-            if missing:
+            missing = [c for c in usable_holdout if c["case_id"] not in preds]
+            if missing and predictor is None:
                 err = SlmEvalError(f"missing predictions for {len(missing)} cases")
                 self._fail("infer", h_infer, err)
                 raise err
-            (self.run_dir / "predictions.jsonl").write_text(
-                "".join(json.dumps(preds[c], sort_keys=True) + "\n" for c in sorted(preds))
-            )
-            self._finish("infer", h_infer, cases=len(holdout))
+            for c in missing:
+                preds[c["case_id"]] = predictor(c)
+            self._write_predictions(preds)
+            self._finish("infer", h_infer, cases=len(usable_holdout),
+                         quarantined=defect_n)
+
+        # --- cost alert (after infer) ---
+        cost_so_far = self.store.cost_total(self.run_id)
+        if cost_so_far >= self.cfg.cost_control.alert_at_usd:
+            self._emit("cost_alert", "warning", level="warning",
+                       cost_usd=cost_so_far, threshold=self.cfg.cost_control.alert_at_usd)
+        if cost_so_far >= self.cfg.cost_control.max_cost_per_round_usd:
+            err = SlmEvalError(f"cost limit exceeded: ${cost_so_far:.4f} >= ${self.cfg.cost_control.max_cost_per_round_usd:.4f}")
+            self._fail("cost_control", h_infer, err)
+            raise err
 
         # --- score (stage 4): exact-match + judge verdicts folded in ---
         h_score = sha256_json({"infer": h_infer, "cfg": cfg_hash})
         if self._begin("score", h_score):
-            self._run_score_stage(holdout, preds)
+            self._run_score_stage(usable_holdout, preds)
         # Load outcomes from disk (not from the stage body) so that resume past a
         # completed score stage still feeds aggregate/gate correctly.
         outcomes = self._load_outcomes()
@@ -184,7 +224,7 @@ class Orchestrator:
                 ci=[round(overall_metric.ci_lower, 4), round(overall_metric.ci_upper, 4)],
             )
 
-        stratum_results = self._stratum_metrics(holdout, outcomes)
+        stratum_results = self._stratum_metrics(usable_holdout, outcomes)
 
         # --- judge_calibrate (stage 6): κ gate (§6.4) ---
         h_cal = sha256_json({"kappa": None if calibration is None else calibration.kappa})
@@ -202,12 +242,15 @@ class Orchestrator:
             pending_reviews=self.store.pending_review_count(self.run_id),
             run_completed=True,
             subjective_fields=list(self.cfg.fields.subjective_fields),
+            defect_rate=defect_rate,
+            defect_n=defect_n,
+            total_n=len(holdout),
         )
         decision = decide_gate(inputs, self.cfg.thresholds)
 
         gate_payload = self._write_gate(
             model_path, model_sha256, split, overall_metric, stratum_results,
-            calibration, decision,
+            calibration, decision, defect_rate=defect_rate, defect_n=defect_n,
         )
         if self._begin("gate", h_gate):
             self._finish("gate", h_gate, status=decision.status, promote=decision.promote)
@@ -215,6 +258,14 @@ class Orchestrator:
         return gate_payload
 
     # -- helpers ---------------------------------------------------------------
+
+    def _write_predictions(self, preds: dict[str, dict[str, Any]]) -> None:
+        """Persist predictions with their case_id so a resumed run can reload them."""
+        lines = "".join(
+            json.dumps({"case_id": cid, "prediction": p}, sort_keys=True) + "\n"
+            for cid, p in sorted(preds.items())
+        )
+        (self.run_dir / "predictions.jsonl").write_text(lines)
 
     def _run_score_stage(
         self, holdout: list[dict], preds: dict[str, dict[str, Any]]
@@ -286,7 +337,7 @@ class Orchestrator:
 
     def _write_gate(
         self, model_path, model_sha256, split, overall, stratum_results,
-        calibration, decision,
+        calibration, decision, *, defect_rate: float = 0.0, defect_n: int = 0,
     ) -> dict[str, Any]:
         payload = {
             "run_id": self.run_id,
@@ -311,6 +362,13 @@ class Orchestrator:
                  "status": s.status}
                 for s in stratum_results
             ],
+            "dataset_defect": {
+                "rate": round(defect_rate, 4),
+                "defect_n": defect_n,
+                "total_n": len(split.holdout),
+                "scored_n": len(split.holdout) - defect_n,
+                "quarantined": defect_n > 0,
+            },
             "judge": (
                 {"kappa": calibration.kappa, "pairs": calibration.pairs,
                  "model": calibration.model}

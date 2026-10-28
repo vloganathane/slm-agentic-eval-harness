@@ -39,6 +39,9 @@ class GateInputs:
     pending_reviews: int = 0
     run_completed: bool = True
     subjective_fields: list[str] = field(default_factory=list)
+    defect_rate: float | None = None      # dataset_defect (quarantined out of F1)
+    defect_n: int = 0
+    total_n: int = 0
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,19 @@ def classify_strata(
     return out
 
 
+def dataset_defect_rate(signal_values: list[str]) -> tuple[float, int]:
+    """Fraction of cases marked ``unextractable``, as (rate, defect_count).
+
+    These are cases whose input carries no extractable signal (blank/garbage OCR).
+    The gate reports them as ``dataset_defect`` so a broken input is never scored
+    as a weak model — the defect rate is the dataset's own quality metric.
+    """
+    if not signal_values:
+        return 0.0, 0
+    defect_n = sum(1 for v in signal_values if v == "unextractable")
+    return defect_n / len(signal_values), defect_n
+
+
 def decide_gate(inputs: GateInputs, thresholds: ThresholdsConfig) -> GateDecision:
     """Apply §6.5. Order matters: error → pending review → CI → strata → κ."""
     if not inputs.run_completed:
@@ -98,6 +114,13 @@ def decide_gate(inputs: GateInputs, thresholds: ThresholdsConfig) -> GateDecisio
             warnings.append(f"stratum_below_target: {s.key} micro_f1={s.micro_f1:.3f}")
         elif s.status == "insufficient_n":
             warnings.append(f"insufficient_n: {s.key} n={s.n} < {thresholds.min_per_stratum}")
+
+    # --- dataset defect (quarantine, §2): reported, never a model blocker ---
+    if inputs.defect_rate is not None and inputs.defect_rate > 0:
+        warnings.append(
+            f"dataset_defect: {inputs.defect_n}/{inputs.total_n} cases "
+            f"({inputs.defect_rate:.0%}) unextractable — excluded from micro-F1"
+        )
 
     # --- κ gate (§6.4, AC-05): only when subjective fields exist ---
     if inputs.subjective_fields:
