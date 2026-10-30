@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from slm_eval import fixture
+from slm_eval.ai_data_integration import ai_data_integration_agent
 from slm_eval.config import EvalConfig
 from slm_eval.errors import ConfigError, LeakageError, SlmEvalError
 from slm_eval.gate import GateInputs, StratumResult, dataset_defect_rate, decide_gate
@@ -255,6 +256,10 @@ class Orchestrator:
         if self._begin("gate", h_gate):
             self._finish("gate", h_gate, status=decision.status, promote=decision.promote)
 
+        # --- AI Data Science Team post-processing (optional stage 8) ---
+        if self.cfg.reporting.formats and self.cfg.reporting.formats[0] == "json":
+            self._post_process(dataset_path)
+
         return gate_payload
 
     # -- helpers ---------------------------------------------------------------
@@ -382,3 +387,52 @@ class Orchestrator:
         }
         (self.run_dir / "gate.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
         return payload
+
+    def _post_process(
+        self,
+        dataset_path: str,
+        llm_base_url: str | None = None,
+        llm_model: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Run AI Data Science Team post-processing analysis.
+
+        This is an optional post-processing stage that runs after the gate decision
+        to provide enhanced analysis, visualization, and semantic insights.
+
+        Args:
+            dataset_path: Path to the original dataset (cases.jsonl)
+            llm_base_url: Optional LLM endpoint for semantic analysis
+            llm_model: Optional LLM model name
+
+        Returns:
+            Dict with AI analysis results, or None if disabled
+        """
+        try:
+            # Find config path (assuming it's in the standard location)
+            config_path = Path(dataset_path).parent.parent / "configs" / "cord-lean.yaml"
+            if not config_path.exists():
+                config_path = Path("configs/cord-lean.yaml")
+            if not config_path.exists():
+                self._emit("post_process", "skipped", level="warning",
+                           reason="config not found")
+                return None
+
+            score_path = self.run_dir / "scores.jsonl"
+            result = ai_data_integration_agent(
+                run_dir=self.run_dir,
+                config_path=config_path,
+                score_path=score_path if score_path.exists() else None,
+                llm_base_url=llm_base_url,
+                llm_model=llm_model,
+            )
+
+            # Write AI analysis report
+            report_path = self.run_dir / "ai_analysis_report.json"
+            import json
+            report_path.write_text(json.dumps(result, indent=2))
+            self._emit("post_process", "completed", report_path=str(report_path))
+
+            return result
+        except Exception as e:
+            self._emit("post_process", "failed", level="error", error=str(e))
+            return None

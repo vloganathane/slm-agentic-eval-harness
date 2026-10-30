@@ -20,12 +20,10 @@ from slm_eval.config import EvalConfig
 from slm_eval.errors import SlmEvalError
 from slm_eval.idiot_index import run_idiot_index
 from slm_eval.judge import CalibrationGate, CalibrationStatus
-from slm_eval.llm import FixtureJudge, LLMClient, OpenAICompatClient, WebEnabledClient, WebSearchProvider, WebEnabledFixtureClient
+from slm_eval.llm import FixtureJudge, LLMClient, OpenAICompatClient
 from slm_eval.pipeline import Orchestrator
-from slm_eval.synthetic import SyntheticCase, GenerationResult, generate_synthetic_cases, inject_synthetic_cases, resolve_synthetic_review
 from slm_eval.store import Store, _now
-
-import time
+from slm_eval.synthetic import generate_synthetic_cases, inject_synthetic_cases
 
 EXIT_PROMOTE, EXIT_BLOCKED, EXIT_ERROR = 0, 1, 2
 
@@ -109,6 +107,100 @@ def _cmd_init(args: argparse.Namespace) -> int:
     with Store(root / "slm_eval.db"):
         pass  # creates schema
     print(f"initialized harness in {root.resolve()}")
+    return EXIT_PROMOTE
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Launch a vLLM OpenAI-compatible server for the model under test."""
+    from slm_eval.serving import ServingError, serve_sync
+
+    cfg = EvalConfig.from_yaml(args.config)
+    try:
+        return serve_sync(cfg, args.model)
+    except ServingError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+def _cmd_data(args: argparse.Namespace) -> int:
+    """Data pipeline: load, validate, analyze, split."""
+    from slm_eval.data_pipeline import DataPipeline
+
+    pipeline = DataPipeline(data_dir=Path(args.cases_dir))
+
+    # Determine the data source
+    cases_path = Path(args.cases_dir) / "holdout" / "cases.jsonl"
+    alt_cases_path = Path(args.cases_dir) / "cases.jsonl"
+
+    if cases_path.exists():
+        print(f"Loading cases from {cases_path}")
+        cases = pipeline.load_cases(cases_path)
+    elif alt_cases_path.exists():
+        print(f"Loading cases from {alt_cases_path}")
+        cases = pipeline.load_cases(alt_cases_path)
+    else:
+        print(f"ERROR: cases.jsonl not found in {args.cases_dir}/holdout/ or {args.cases_dir}/")
+        return EXIT_ERROR
+
+    print(f"Loaded {len(cases)} cases")
+
+    # Validate cases
+    print("\nRunning data validation...")
+    report = pipeline.validate(cases)
+    print(f"Valid: {report.valid_cases}/{report.total_cases}")
+    print(f"Invalid: {report.invalid_cases}")
+
+    if report.schema_errors:
+        print("Schema errors (first 5):")
+        for err in report.schema_errors[:5]:
+            print(f"  - {err}")
+
+    # Print recommendations
+    if report.recommendations:
+        print("Recommendations:")
+        for rec in report.recommendations:
+            print(f"  - {rec}")
+
+    # Analyze with MinHash dedup
+    src_path = cases_path if cases_path.exists() else alt_cases_path
+    print(f"\nRunning dataset analysis (minhash threshold: {args.minhash_threshold})...")
+    analysis = pipeline.analyze(
+        src_path,
+        minhash_threshold=args.minhash_threshold,
+    )
+    print(f"Total cases: {analysis.get('n_cases', 'N/A')}")
+    print(f"Fields seen: {analysis.get('n_fields', 'N/A')}")
+    print(f"Duplicate pairs: {len(analysis.get('duplicate_pairs', []))}")
+
+    # Stratified split
+    print(f"\nPreparing stratified split (holdout fraction: {args.holdout_fraction})")
+    if args.strata_keys is None:
+        split_result = pipeline.prepare_split(
+            cases=cases, strata_keys=None, holdout_fraction=args.holdout_fraction, seed=args.seed
+        )
+    else:
+        split_result = pipeline.prepare_split(
+            cases=cases,
+            strata_keys=args.strata_keys,
+            holdout_fraction=args.holdout_fraction,
+            seed=args.seed,
+        )
+    print(f"Train cases: {len(split_result['train'])}")
+    print(f"Holdout cases: {len(split_result['holdout'])}")
+
+    # Save splits
+    runs_dir = Path(args.cases_dir)
+    output_dir = runs_dir / "splits"
+    counts = pipeline.save_splits(split_result, output_dir)
+    print(f"Saved {counts['train']} training cases to {output_dir / 'train.jsonl'}")
+    print(f"Saved {counts['holdout']} holdout cases to {output_dir / 'holdout.jsonl'}")
+
+    # Also save in training format for LoRA fine-tuning
+    training_dir = runs_dir / "training_format"
+    pipeline.to_training_format(split_result["train"], training_dir / "train.jsonl")
+    pipeline.to_training_format(split_result["holdout"], training_dir / "holdout.jsonl")
+    print(f"Saved training-format cases to {training_dir}/")
+
     return EXIT_PROMOTE
 
 
@@ -240,42 +332,58 @@ def _cmd_run(args: argparse.Namespace) -> int:
         # be requested (--fixture-gold) so a dev run can never masquerade as a
         # measured one, and live inference requires a reachable endpoint.
         predictor, predictions = None, None
-        if args.fixture_gold:
-            print(
-                "warning: --fixture-gold scores the dataset against its OWN gold — "
-                "metrics are meaningless (dev loop only)",
-                file=sys.stderr,
-            )
-            predictions = {
-                c["case_id"]: c["gold"] for c in fixture.read_dataset(dataset)
-            }
-        else:
-            if not args.infer and not _endpoint_reachable(cfg.inference.base_url):
-                print(
-                    f"error: inference endpoint {cfg.inference.base_url} is not "
-                    "reachable.\n  Start your model server (e.g. llama-server) and "
-                    "re-run, or pass\n  --fixture-gold for a dev-loop run that scores "
-                    "against the dataset's own gold.",
-                    file=sys.stderr,
-                )
-                return EXIT_ERROR
-            if args.infer and not _endpoint_reachable(cfg.inference.base_url):
-                print(
-                    f"error: --infer requested but {cfg.inference.base_url} "
-                    "is not reachable",
-                    file=sys.stderr,
-                )
-                return EXIT_ERROR
-            predictor = _make_predictor(cfg, Path(model_path).name)
+        server = None
+        if args.auto_serve and not args.fixture_gold:
+            from slm_eval.serving import ServingError, VllmServer, build_spec_from_config
 
-        gate = orch.run(
-            model_path=model_path,
-            model_sha256=_file_sha256(model_path),
-            dataset_path=dataset,
-            predictions=predictions,
-            predictor=predictor,
-            calibration=_load_calibration(cfg),
-        )
+            spec = build_spec_from_config(cfg, args.model or model_path)
+            cfg.inference.base_url = spec.base_url  # route inference at vLLM
+            try:
+                server = VllmServer(spec).start()
+            except ServingError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return EXIT_ERROR
+        try:
+            if args.fixture_gold:
+                print(
+                    "warning: --fixture-gold scores the dataset against its OWN gold — "
+                    "metrics are meaningless (dev loop only)",
+                    file=sys.stderr,
+                )
+                predictions = {
+                    c["case_id"]: c["gold"] for c in fixture.read_dataset(dataset)
+                }
+            else:
+                if not args.auto_serve and not _endpoint_reachable(cfg.inference.base_url):
+                    print(
+                        f"error: inference endpoint {cfg.inference.base_url} is not "
+                        "reachable.\n  Start your model server (e.g. llama-server) and "
+                        "re-run, or pass\n  --fixture-gold for a dev-loop run that scores "
+                        "against the dataset's own gold,\n  or pass --auto-serve to launch "
+                        "a vLLM server for --model.",
+                        file=sys.stderr,
+                    )
+                    return EXIT_ERROR
+                if args.infer and not _endpoint_reachable(cfg.inference.base_url):
+                    print(
+                        f"error: --infer requested but {cfg.inference.base_url} "
+                        "is not reachable",
+                        file=sys.stderr,
+                    )
+                    return EXIT_ERROR
+                predictor = _make_predictor(cfg, Path(model_path).name)
+
+            gate = orch.run(
+                model_path=model_path,
+                model_sha256=_file_sha256(model_path),
+                dataset_path=dataset,
+                predictions=predictions,
+                predictor=predictor,
+                calibration=_load_calibration(cfg),
+            )
+        finally:
+            if server is not None:
+                server.stop()
         decision = gate["decision"]
         print(json.dumps(gate, indent=2, sort_keys=True))
         if decision["status"] == "error":
@@ -340,8 +448,9 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 def _cmd_report(args: argparse.Namespace) -> int:
     """Generate markdown report from gate.json + review queue."""
-    from jinja2 import Environment, FileSystemLoader
     from datetime import UTC, datetime
+
+    from jinja2 import Environment, FileSystemLoader
     
     run_dir = Path(args.run_dir)
     gate_file = run_dir / "gate.json"
@@ -449,6 +558,19 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--force", action="store_true")
     c.set_defaults(func=_cmd_init)
 
+    c = sub.add_parser("data", help="data pipeline: load, validate, analyze, split")
+    c.add_argument("--cases-dir", default="runs", help="Directory containing cases.jsonl")
+    c.add_argument("--minhash-threshold", type=float, default=0.8, help="Minimum similarity for near-duplicate detection")
+    c.add_argument("--holdout-fraction", type=float, default=0.2, help="Fraction of data to use as holdout")
+    c.add_argument("--strata-keys", nargs="+", default=None, help="Keys to use for stratified splitting")
+    c.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    c.set_defaults(func=_cmd_data)
+
+    c = sub.add_parser("serve", help="launch vLLM OpenAI-compatible server")
+    c.add_argument("-c", "--config", required=True, help="Path to eval_config.yaml")
+    c.add_argument("--model", required=True, help="Model repo/path to serve")
+    c.set_defaults(func=_cmd_serve)
+
     c = sub.add_parser("run", help="run the eval gate")
     c.add_argument("-c", "--config", required=True)
     c.add_argument("--model")
@@ -462,6 +584,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the model under test at inference.base_url (default when the "
         "endpoint is reachable). Requires a live model server.",
+    )
+    c.add_argument(
+        "--auto-serve",
+        action="store_true",
+        help="Launch a vLLM server for --model (backend=vllm) around this run. "
+        "Adopts an existing server on the port if one is already answering.",
     )
     c.add_argument(
         "--fixture-gold",
@@ -525,6 +653,22 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("-c", "--config", required=True)
     c.set_defaults(func=_cmd_idiot_index)
 
+    c = sub.add_parser("train", help="LoRA fine-tuning with evaluation integration")
+    c.add_argument("-c", "--config", required=True, help="Path to eval_config.yaml")
+    c.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct", help="Base model to fine-tune")
+    c.add_argument("--dataset", default=None, help="Path to training dataset (JSONL)")
+    c.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    c.add_argument("--batch-size", type=int, default=2, help="Training batch size")
+    c.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    c.add_argument("--use-lora", action=argparse.BooleanOptionalAction, default=True, help="Use LoRA for PEFT")
+    c.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    c.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
+    c.add_argument("--output-dir", default="./models/fine_tuned", help="Output directory for checkpoints")
+    c.add_argument("--run-id", default=None, help="Run ID for tracking")
+    c.add_argument("--resume", default=None, help="Resume from checkpoint path")
+    c.add_argument("--max-cost", type=float, default=50.0, help="Max cost per round in USD")
+    c.set_defaults(func=_cmd_train)
+
     c = sub.add_parser("synthetic", help="generate synthetic cases (M3)")
     c.add_argument("-c", "--config", required=True)
     c.add_argument("--run-dir", required=True, help="Run directory (for holdout + output)")
@@ -586,7 +730,7 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
             cmd.append("--no-idiot-index")
         
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=False)
+        result = subprocess.run(cmd, capture_output=False, check=False)
         if result.returncode != 0 and result.returncode != 1:  # 1 = blocked is OK
             print(f"Run failed with exit code {result.returncode}")
             return EXIT_ERROR
@@ -640,7 +784,6 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
             while True:
                 store = Store(Path(args.config).parent / "slm_eval.db")
                 try:
-                    pending = store.pending_review_count(run_id)
                     synthetic_pending = [
                         t for t in store.get_review_tasks(run_id, "pending")
                         if t["reason"] == "synthetic_injection"
@@ -652,7 +795,7 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
                     store.close()
                 time.sleep(30)
             
-            print(f"✅ All synthetic reviews resolved. Continuing to next round.")
+            print("✅ All synthetic reviews resolved. Continuing to next round.")
     
     return EXIT_PROMOTE
 
@@ -790,6 +933,145 @@ def _cmd_idiot_index(args) -> int:
     report = run_idiot_index(args.config)
     print(report.summary())
     return report.exit_code()
+
+
+def _cmd_train(args) -> int:
+    """LoRA fine-tuning with evaluation integration."""
+    import json
+    import os
+    import sys
+    from pathlib import Path
+
+    import torch
+    import wandb
+    from datasets import load_dataset
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import SFTConfig, SFTTrainer
+
+    # Initialize wandb
+    if os.getenv("WANDB_API_KEY"):
+        wandb.init(
+            project="slm-training",
+            name=args.run_id or f"train-{int(time.time())}",
+            config=vars(args),
+            save_code=True,
+        )
+
+    print("Starting LoRA fine-tuning...")
+    print(f"  Model: {args.model}")
+    print(f"  Config: {args.config}")
+    print(f"  Epochs: {args.epochs}")
+    print(f"  Batch size: {args.batch_size}")
+    print(f"  Learning rate: {args.lr}")
+    print(f"  LoRA: {args.use_lora} (r={args.lora_r}, alpha={args.lora_alpha})")
+
+    # Prepare dataset
+    if args.dataset:
+        dataset_path = Path(args.dataset)
+        if not dataset_path.exists():
+            print(f"Dataset not found: {dataset_path}", file=sys.stderr)
+            return 2
+        dataset = load_dataset("json", data_files=str(dataset_path))
+    else:
+        # Generate synthetic data for testing
+        print("No dataset provided, generating synthetic data...")
+        data = [{"text": "Extract receipt: total amount 100.00, items: coffee, sandwich, drink."} for _ in range(100)]
+        dataset = load_dataset("json", data=data)
+
+    # Create model
+    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    has_cuda = torch.cuda.is_available()
+    if has_cuda:
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    else:
+        dtype = torch.float32
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        torch_dtype=dtype,
+        device_map="auto" if has_cuda else None,
+    )
+
+    if args.use_lora:
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(model, lora_config)
+        trainable, total = model.get_nb_trainable_parameters()
+        print(f"LoRA applied. Trainable params: {trainable:,} / {total:,}")
+
+    # Training arguments — TRL >= 1.0 expects the SFT-specific knobs on
+    # SFTConfig (dataset_text_field / max_length / packing), not on the trainer.
+    training_args = SFTConfig(
+        output_dir=args.output_dir,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=4,
+        learning_rate=args.lr,
+        logging_steps=10,
+        save_steps=500,
+        warmup_steps=min(100, max(1, args.epochs)),
+        gradient_checkpointing=has_cuda,
+        fp16=has_cuda and not torch.cuda.is_bf16_supported(),
+        bf16=has_cuda and torch.cuda.is_bf16_supported(),
+        report_to="wandb" if os.getenv("WANDB_API_KEY") else "none",
+        run_name=args.run_id or f"train-{int(time.time())}",
+        max_length=1024,
+        dataset_text_field="text",
+        packing=False,
+    )
+
+    trainer = SFTTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset.get("test"),
+        processing_class=tokenizer,
+    )
+
+    # Train
+    print("Starting training...")
+    try:
+        trainer.train(resume_from_checkpoint=args.resume)
+        print("Training completed successfully!")
+    except Exception as e:  # noqa: BLE001 — surface any trainer failure as exit 2
+        print(f"Training error: {e}", file=sys.stderr)
+        return 2
+
+    # Save final model
+    final_model_path = Path(args.output_dir) / f"{args.run_id or 'model'}_final"
+    if trainer.is_world_process_zero():
+        trainer.save_model(final_model_path)
+        tokenizer.save_pretrained(final_model_path)
+
+        # Save training config (drop the argparse handler, which isn't JSON)
+        config_path = Path(args.output_dir) / f"{args.run_id or 'model'}_config.json"
+        train_config = {k: v for k, v in vars(args).items() if not callable(v)}
+        with open(config_path, "w") as f:
+            json.dump(train_config, f, indent=2)
+
+        print(f"Model saved to: {final_model_path}")
+        print(f"Config saved to: {config_path}")
+
+    if wandb.run:
+        wandb.finish()
+
+    print("\n=== Training Complete ===")
+    print(f"Run ID: {args.run_id or 'model'}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Model size: {trainer.model.num_parameters():,} parameters")
+    print(f"Learnable parameters: {sum(p.numel() for p in trainer.model.parameters() if p.requires_grad):,}")
+
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -44,5 +44,9 @@ sha2 = "0.10"
 hex = "0.4"
 regex = "1"
 
+# Infinity RAP runtime
+infinity-agent-core = "0.2"
+rap-client = "0.2"
+
 [dev-dependencies]
 tokio-test = "0.4"

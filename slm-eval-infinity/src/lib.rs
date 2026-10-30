@@ -9,3 +9,4 @@ pub mod eval;
 pub mod models;
 pub mod split;
 pub mod store;
+pub mod inference;

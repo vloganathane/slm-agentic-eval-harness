@@ -145,7 +145,7 @@ impl Default for RetryConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceConfig {
     pub backend: String,
     pub base_url: String,
@@ -153,9 +153,18 @@ pub struct InferenceConfig {
     pub retry: RetryConfig,
 }
 
-impl InferenceConfig {
-    fn default_backend() -> String { "llama_server".to_string() }
-    fn default_base_url() -> String { "http://127.0.0.1:8080/v1".to_string() }
+fn default_backend() -> String { "llama_server".to_string() }
+fn default_base_url() -> String { "http://127.0.0.1:8080/v1".to_string() }
+
+impl Default for InferenceConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_backend(),
+            base_url: default_base_url(),
+            timeout_seconds: 30,
+            retry: RetryConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -190,6 +199,7 @@ pub struct EvalConfig {
     pub human_review: HumanReviewConfig,
     pub cost_control: CostControlConfig,
     pub reporting: ReportingConfig,
+    pub config_hash: String,
 }
 
 fn default_task_type() -> String { "extraction".to_string() }
@@ -209,6 +219,7 @@ impl Default for EvalConfig {
             human_review: HumanReviewConfig::default(),
             cost_control: CostControlConfig::default(),
             reporting: ReportingConfig::default(),
+            config_hash: String::new(),
         }
     }
 }

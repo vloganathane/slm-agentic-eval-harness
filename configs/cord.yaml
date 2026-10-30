@@ -41,6 +41,13 @@ inference:
   retry:
     max_attempts: 3
     backoff_base: 2
+  # vLLM backend (backend: vllm). Launch with `slm-eval serve` or run with
+  # `slm-eval run --auto-serve`; base_url is then derived from vllm_port.
+  vllm_port: 8000
+  vllm_gpu_memory_utilization: 0.9
+  vllm_max_model_len: null
+  vllm_dtype: auto
+  vllm_tensor_parallel_size: 1
 human_review:
   timeout_hours: 0
   notify: []

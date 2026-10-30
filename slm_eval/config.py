@@ -210,10 +210,16 @@ class RetryConfig(BaseModel):
 
 
 class InferenceConfig(BaseModel):
-    backend: Literal["llama_server", "openai"] = "llama_server"
+    backend: Literal["llama_server", "openai", "vllm"] = "llama_server"
     base_url: str = "http://127.0.0.1:8080/v1"
     timeout_seconds: int = 1800
     retry: RetryConfig = Field(default_factory=RetryConfig)
+    # vLLM-specific serving options (used only when backend == "vllm")
+    vllm_port: int = 8000
+    vllm_gpu_memory_utilization: float = 0.9
+    vllm_max_model_len: int | None = None
+    vllm_dtype: str = "auto"
+    vllm_tensor_parallel_size: int = 1
 
 
 class HumanReviewConfig(BaseModel):

@@ -33,6 +33,20 @@ slm-eval run -c eval_config.yaml --model model.gguf --dataset data/holdout/
 slm-eval gate runs/<run_id>   # exit 0 promote · 1 blocked · 2 error
 ```
 
+## Train → evaluate → serve
+
+| Command | Purpose |
+|---|---|
+| `slm-eval data --cases-dir runs/<id> --strata-keys item_count` | Validate, dedup, stratified-split a dataset; writes `splits/` + `training_format/` |
+| `slm-eval train -c eval_config.yaml --dataset runs/<id>/training_format/train.jsonl` | LoRA fine-tune (PEFT/TRL) and emit a checkpoint |
+| `slm-eval serve -c eval_config.yaml --model <repo\|path>` | Launch a vLLM OpenAI-compatible server |
+| `slm-eval run -c eval_config.yaml --model <repo> --auto-serve` | Run the gate, launching vLLM around inference automatically |
+
+`--auto-serve` adopts an already-running server on `inference.vllm_port` instead
+of double-allocating the GPU. vLLM is optional: without it, use
+`backend: llama_server` / `openai` or pass `--fixture-gold` for a dev-loop run.
+vLLM itself ships for Linux/NVIDIA hosts; on macOS use `llama_server` or `openai`.
+
 ## Development
 
 ```bash
