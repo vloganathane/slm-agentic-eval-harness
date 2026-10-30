@@ -32,6 +32,7 @@ decided. Point estimates never gate.
 | LoRA training (`slm-eval train`) — PEFT/TRL SFT | ✅ complete |
 | vLLM serving (`slm-eval serve`, `run --auto-serve`) | ✅ code complete (requires Linux/NVIDIA) |
 | AI Data Science analysis report (`runs/<id>/viz/ai_analysis_report.json`) | ✅ complete |
+| Agent contract (`slm_eval.agents`) — advisory lane may propose, never score/gate (AC-11) | ✅ complete |
 | Rust core (`slm-eval-infinity`) | ⚠️ partial: deterministic gate/scoring with Python parity tests; RAP runtime integration experimental (not compiled) |
 
 ## Quickstart

@@ -255,3 +255,46 @@ def test_cost_cap_exceeded_fails_run_before_scoring(tmp_path):
         )
     finally:
         store.close()
+
+
+def test_cost_cap_equal_to_spend_is_allowed(tmp_path):
+    """A $0 budget is a ceiling, not a trigger: spending exactly $0 is fine."""
+    ds = _mk_dataset(tmp_path)
+    lean = _cfg_with(
+        cost_control={"max_cost_per_round_usd": 0.0, "alert_at_usd": 0.0}
+    )
+    gate = _run(tmp_path, ds, "run-lean", cfg=lean)
+
+    assert gate["decision"]["promote"] is True
+    assert gate["cost_usd"] == 0.0
+
+
+def test_force_overrides_cost_cap(tmp_path):
+    """--force records the overrun as a warning but still produces a gate."""
+    ds = _mk_dataset(tmp_path)
+    capped = _cfg_with(
+        cost_control={"max_cost_per_round_usd": 0.5, "alert_at_usd": 0.5}
+    )
+    run_id = "run-cap-forced"
+    run_dir = tmp_path / "runs" / run_id
+    store = Store(tmp_path / "db.sqlite")
+    try:
+        store.add_cost(run_id, "prior_round", 0.75)
+        orch = Orchestrator(capped, store, run_dir, _judge_client(), force_cost=True)
+        predictions = {c["case_id"]: c["gold"] for c in fixture.read_dataset(ds)}
+
+        gate = orch.run(
+            model_path="m.gguf", model_sha256="m" * 64,
+            dataset_path=ds, predictions=predictions, calibration=GOOD_CAL,
+        )
+
+        assert (run_dir / "gate.json").exists()
+        assert gate["decision"]["promote"] is True
+        events = [
+            json.loads(line) for line in (run_dir / "events.jsonl").read_text().splitlines()
+        ]
+        assert any(
+            e["stage"] == "cost_control" and e.get("forced") is True for e in events
+        )
+    finally:
+        store.close()

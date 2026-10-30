@@ -97,6 +97,17 @@ def test_report_missing_gate_returns_error(tmp_path, capsys):
     assert "Gate file not found" in capsys.readouterr().err
 
 
+def test_train_rejects_budget_below_eval_round_cap(tmp_path, capsys):
+    """--max-cost is a real guard: the eval round must fit the training budget."""
+    from slm_eval.cli import _cmd_train
+
+    config = _write_config(tmp_path)  # default cost cap is $10
+    code = _cmd_train(Namespace(config=config, max_cost=1.0))
+
+    assert code == EXIT_ERROR
+    assert "exceeds --max-cost" in capsys.readouterr().err
+
+
 def test_inspect_prints_artifacts_and_timeline(tmp_path, capsys):
     run_dir = _write_run(tmp_path)
 

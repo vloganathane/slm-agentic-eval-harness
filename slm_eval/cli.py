@@ -320,7 +320,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         orch = Orchestrator(
             cfg, store, run_dir, _make_judge_client(cfg, args.judge_endpoint),
             code_version=f"git:{__version__}", resume=args.resume,
-            config_path=args.config,
+            config_path=args.config, force_cost=args.force,
         )
         if args.dataset:
             dataset = args.dataset
@@ -580,6 +580,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--run-id")
     c.add_argument("--fixture-count", type=int, default=200)
     c.add_argument("--resume", action="store_true")
+    c.add_argument(
+        "--force",
+        action="store_true",
+        help="Continue when the round cost cap is exceeded (records a warning).",
+    )
     c.add_argument(
         "--infer",
         action="store_true",
@@ -942,6 +947,21 @@ def _cmd_train(args) -> int:
     import os
     import sys
     from pathlib import Path
+
+    # Budget guard: the eval round that validates this adapter must fit --max-cost.
+    try:
+        eval_cfg = EvalConfig.from_yaml(args.config)
+    except SlmEvalError as e:
+        print(f"error: cannot read eval config {args.config}: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    round_cap = eval_cfg.cost_control.max_cost_per_round_usd
+    if round_cap > args.max_cost:
+        print(
+            f"error: eval round cap ${round_cap:.2f} exceeds --max-cost "
+            f"${args.max_cost:.2f}; raise --max-cost or lower cost_control.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
 
     import torch
     import wandb

@@ -42,6 +42,7 @@ class Orchestrator:
         code_version: str = "git:unknown",
         resume: bool = False,
         config_path: str | Path | None = None,
+        force_cost: bool = False,
     ) -> None:
         self.cfg = cfg
         self.store = store
@@ -49,6 +50,7 @@ class Orchestrator:
         self.judge_client = judge_client
         self.code_version = code_version
         self.resume = resume
+        self.force_cost = force_cost
         # Source config path (provenance) — agents need the real file, not a
         # hardcoded default, to read thresholds/reporting settings.
         self.config_path = Path(config_path) if config_path is not None else None
@@ -197,14 +199,23 @@ class Orchestrator:
                          quarantined=defect_n)
 
         # --- cost alert (after infer) ---
+        # The cap is a ceiling, not a floor: reaching it exactly is allowed
+        # (a $0 local-only budget must not fail a run that spent $0). `--force`
+        # records the overrun and continues, per SPEC_V3 §5.4.
         cost_so_far = self.store.cost_total(self.run_id)
-        if cost_so_far >= self.cfg.cost_control.alert_at_usd:
+        if cost_so_far > self.cfg.cost_control.alert_at_usd:
             self._emit("cost_alert", "warning", level="warning",
                        cost_usd=cost_so_far, threshold=self.cfg.cost_control.alert_at_usd)
-        if cost_so_far >= self.cfg.cost_control.max_cost_per_round_usd:
-            err = SlmEvalError(f"cost limit exceeded: ${cost_so_far:.4f} >= ${self.cfg.cost_control.max_cost_per_round_usd:.4f}")
-            self._fail("cost_control", h_infer, err)
-            raise err
+        if cost_so_far > self.cfg.cost_control.max_cost_per_round_usd:
+            if self.force_cost:
+                self._emit("cost_control", "warning", level="warning",
+                           cost_usd=cost_so_far,
+                           threshold=self.cfg.cost_control.max_cost_per_round_usd,
+                           forced=True)
+            else:
+                err = SlmEvalError(f"cost limit exceeded: ${cost_so_far:.4f} > ${self.cfg.cost_control.max_cost_per_round_usd:.4f}")
+                self._fail("cost_control", h_infer, err)
+                raise err
 
         # --- score (stage 4): exact-match + judge verdicts folded in ---
         h_score = sha256_json({"infer": h_infer, "cfg": cfg_hash})
