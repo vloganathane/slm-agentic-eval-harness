@@ -8,11 +8,14 @@ use std::collections::{BTreeMap, HashMap};
 pub const DEFAULT_NORMALIZE_OPS: &[&str] = &["trim", "collapse_ws"];
 
 /// Normalize a string value by applying ops in order: trim, collapse_ws, casefold.
+/// An empty `ops` slice means the default ops (`trim`, `collapse_ws`) — matching
+/// the Python reference (`slm_eval.scoring.normalize`).
 pub fn normalize(value: &Option<String>, ops: &[String]) -> String {
+    let default_ops = ops.is_empty();
     let s = if let Some(v) = value { v.clone() } else { String::new() };
     let trimmed = s.trim().to_string();
     let mut result = trimmed;
-    if ops.iter().any(|o| o == "collapse_ws") {
+    if default_ops || ops.iter().any(|o| o == "collapse_ws") {
         let mut out = String::new();
         let mut prev_space = false;
         for c in result.chars() {
@@ -64,18 +67,46 @@ fn regex_full_match(pattern: &str, s: &str) -> bool {
     }
 }
 
-fn parse_date(_s: &str, formats: &[String]) -> Option<String> {
+fn parse_date(s: &str, formats: &[String]) -> Option<String> {
+    let s = s.trim();
     for f in formats {
-        let parts: Vec<&str> = f.split('-').collect();
-        if parts.len() == 3 {
-            if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>(), parts[2].parse::<i32>()) {
-                if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
-                    return Some(format!("{}-{:02}-{:02}", y, m, d));
-                }
-            }
+        let parsed = match f.as_str() {
+            "%Y-%m-%d" => parse_day_first(s, '-', true),
+            "%Y/%m/%d" => parse_day_first(s, '/', true),
+            "%d/%m/%Y" => parse_day_first(s, '/', false),
+            "%d-%m-%Y" => parse_day_first(s, '-', false),
+            _ => None,
+        };
+        if parsed.is_some() {
+            return parsed;
         }
     }
     None
+}
+
+/// Parse `Y-M-D` (year first) or `D/M/Y` (year last) into canonical `YYYY-MM-DD`.
+fn parse_day_first(s: &str, sep: char, year_first: bool) -> Option<String> {
+    let parts: Vec<&str> = s.split(sep).collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let (y, m, d) = if year_first {
+        (
+            parts[0].parse::<i32>().ok()?,
+            parts[1].parse::<u32>().ok()?,
+            parts[2].parse::<u32>().ok()?,
+        )
+    } else {
+        (
+            parts[2].parse::<i32>().ok()?,
+            parts[1].parse::<u32>().ok()?,
+            parts[0].parse::<u32>().ok()?,
+        )
+    };
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some(format!("{y:04}-{m:02}-{d:02}"))
 }
 
 fn item_key(v: &Value) -> String {
@@ -310,4 +341,100 @@ pub fn kappa_ci(a: &[String], b: &[String], resamples: usize, seed: u64, alpha: 
     let pos_lo = ((vals.len() as f64) * alpha / 2.0).floor() as usize;
     let pos_hi = ((vals.len() as f64) * (1.0 - alpha / 2.0)).ceil() as usize;
     (vals[pos_lo.min(vals.len() - 1)], vals[pos_hi.min(vals.len() - 1)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn opt_str(v: &str) -> Option<Value> {
+        Some(Value::String(v.to_string()))
+    }
+
+    fn opt_s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    #[test]
+    fn normalize_collapse_ws_and_casefold() {
+        assert_eq!(normalize(&opt_s("  Hello   World  "), &[]), "Hello World");
+        let ops = vec!["trim".to_string(), "collapse_ws".to_string(), "casefold".to_string()];
+        assert_eq!(normalize(&opt_s("  Hi There "), &ops), "hi there");
+    }
+
+    #[test]
+    fn numeric_tolerance() {
+        let v = Validator::Numeric { tolerance: 0.01 };
+        assert_eq!(score_field(&opt_str("100.005"), &opt_str("100.0"), &Some(v.clone())), (1, 0, 0));
+        assert_eq!(score_field(&opt_str("101.0"), &opt_str("100.0"), &Some(v)), (0, 1, 1));
+    }
+
+    #[test]
+    fn regex_requires_format_and_value() {
+        let v = Validator::Regex { pattern: r"^\d{3}$".to_string() };
+        assert_eq!(score_field(&opt_str("123"), &opt_str("123"), &Some(v.clone())), (1, 0, 0));
+        assert_eq!(score_field(&opt_str("12"), &opt_str("12"), &Some(v.clone())), (0, 1, 1));
+        assert_eq!(score_field(&opt_str("999"), &opt_str("123"), &Some(v)), (0, 1, 1));
+    }
+
+    #[test]
+    fn date_validator_normalizes_formats() {
+        let v = Validator::Date {
+            formats: vec!["%Y-%m-%d".to_string(), "%d/%m/%Y".to_string()],
+        };
+        assert_eq!(score_field(&opt_str("05/03/2024"), &opt_str("2024-03-05"), &Some(v.clone())), (1, 0, 0));
+        assert_eq!(score_field(&opt_str("2024-03-06"), &opt_str("2024-03-05"), &Some(v)), (0, 1, 1));
+    }
+
+    #[test]
+    fn string_normalize_trims_and_casefolds() {
+        let v = Validator::String {
+            normalize: vec!["trim".to_string(), "collapse_ws".to_string(), "casefold".to_string()],
+        };
+        assert_eq!(score_field(&opt_str(" INV  001 "), &opt_str("inv 001"), &Some(v)), (1, 0, 0));
+    }
+
+    #[test]
+    fn list_item_matching_counts_elements() {
+        let gold = json!([{"sku": "A", "qty": 1}, {"sku": "B", "qty": 2}]);
+        let pred = json!([{"sku": "A", "qty": 1}, {"sku": "C", "qty": 9}]);
+        assert_eq!(score_field(&Some(pred), &Some(gold), &Some(Validator::List)), (1, 1, 1));
+    }
+
+    #[test]
+    fn list_exact_match_and_empty_prediction() {
+        let gold = json!([{"sku": "A", "qty": 1}]);
+        assert_eq!(score_field(&Some(gold.clone()), &Some(gold.clone()), &Some(Validator::List)), (1, 0, 0));
+        assert_eq!(score_field(&Some(json!([])), &Some(gold), &Some(Validator::List)), (0, 0, 1));
+    }
+
+    #[test]
+    fn scalar_wrong_value_is_fp_and_fn() {
+        assert_eq!(score_field(&opt_str("INV-2"), &opt_str("INV-1"), &None), (0, 1, 1));
+    }
+
+    #[test]
+    fn micro_f1_is_element_level() {
+        let outcomes = vec![
+            FieldOutcome::new("a".into(), 1, 0, 0),
+            FieldOutcome::new("b".into(), 0, 1, 1),
+        ];
+        assert!((micro_f1(&outcomes) - 1.0 / 3.0).abs() < 1e-12);
+        assert_eq!(micro_f1(&[]), 0.0);
+    }
+
+    #[test]
+    fn bootstrap_is_deterministic_for_a_seed() {
+        let outcomes = vec![
+            FieldOutcome::new("a".into(), 1, 0, 0),
+            FieldOutcome::new("b".into(), 0, 1, 1),
+            FieldOutcome::new("c".into(), 1, 0, 0),
+        ];
+        let m1 = bootstrap_micro_f1(&outcomes, 500, 42, 0.05);
+        let m2 = bootstrap_micro_f1(&outcomes, 500, 42, 0.05);
+        assert_eq!(m1.ci_lower, m2.ci_lower);
+        assert_eq!(m1.ci_upper, m2.ci_upper);
+        assert!(m1.ci_lower <= m1.point && m1.point <= m1.ci_upper);
+    }
 }

@@ -76,7 +76,7 @@ pub fn decide_gate(inputs: &GateInputs, thresholds: &ThresholdsConfig) -> GateDe
 
     if let Some(dr) = inputs.defect_rate {
         if dr > 0.0 {
-            warnings.push(format!("dataset_defect: {}/{} cases ({:.2}) unextractable — excluded from micro-F1", inputs.defect_n, inputs.total_n, dr));
+            warnings.push(format!("dataset_defect: {}/{} cases ({:.0}%) unextractable — excluded from micro-F1", inputs.defect_n, inputs.total_n, dr * 100.0));
         }
     }
 
@@ -97,4 +97,87 @@ pub fn decide_gate(inputs: &GateInputs, thresholds: &ThresholdsConfig) -> GateDe
     }
 
     GateDecision { status: "promote".into(), promote: true, reason: "all_checks_passed".into(), blockers, warnings }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// The same fixture is exercised by `tests/test_gate_parity.py`; Python is
+    /// the reference implementation, so any drift in this port fails here.
+    fn parity_fixture() -> Value {
+        serde_json::from_str(include_str!("../../../tests/fixtures/gate_cases.json"))
+            .expect("gate parity fixture must be valid JSON")
+    }
+
+    fn strings(v: &Value) -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn stratum(v: &Value) -> StratumResult {
+        StratumResult {
+            key: v["key"].as_str().unwrap().to_string(),
+            n: v["n"].as_u64().unwrap() as usize,
+            micro_f1: v["micro_f1"].as_f64().unwrap(),
+            ci_lower: v["ci_lower"].as_f64().unwrap(),
+            ci_upper: v["ci_upper"].as_f64().unwrap(),
+            status: StratumStatus::Ok,
+        }
+    }
+
+    #[test]
+    fn gate_matches_python_parity_fixture() {
+        let doc = parity_fixture();
+        let t = &doc["thresholds"];
+        let thresholds = ThresholdsConfig {
+            target_f1: t["target_f1"].as_f64().unwrap(),
+            failure_threshold: t["failure_threshold"].as_f64().unwrap(),
+            min_per_stratum: t["min_per_stratum"].as_u64().unwrap() as usize,
+        };
+
+        for case in doc["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let i = &case["inputs"];
+            let inputs = GateInputs {
+                run_completed: i["run_completed"].as_bool().unwrap(),
+                overall_micro_f1: i["micro_f1"].as_f64().unwrap(),
+                overall_ci_lower: i["ci_lower"].as_f64().unwrap(),
+                overall_ci_upper: i["ci_upper"].as_f64().unwrap(),
+                overall_n: i["overall_n"].as_u64().unwrap() as usize,
+                strata: i["strata"].as_array().unwrap().iter().map(stratum).collect(),
+                kappa: i["kappa"].as_f64(),
+                pending_reviews: i["pending_reviews"].as_u64().unwrap() as usize,
+                subjective_fields: strings(&i["subjective_fields"]),
+                defect_rate: i["defect_rate"].as_f64(),
+                defect_n: i["defect_n"].as_u64().unwrap() as usize,
+                total_n: i["total_n"].as_u64().unwrap() as usize,
+            };
+
+            let got = decide_gate(&inputs, &thresholds);
+            let exp = &case["expected"];
+            assert_eq!(got.status, exp["status"].as_str().unwrap(), "status: {name}");
+            assert_eq!(got.promote, exp["promote"].as_bool().unwrap(), "promote: {name}");
+            assert_eq!(got.reason, exp["reason"].as_str().unwrap(), "reason: {name}");
+            assert_eq!(got.blockers, strings(&exp["blockers"]), "blockers: {name}");
+            assert_eq!(got.warnings, strings(&exp["warnings"]), "warnings: {name}");
+        }
+    }
+
+    #[test]
+    fn classify_strata_matches_python_statuses() {
+        let thresholds = ThresholdsConfig { target_f1: 0.85, failure_threshold: 0.5, min_per_stratum: 50 };
+        let strata = vec![
+            StratumResult { key: "ok".into(), n: 100, micro_f1: 0.9, ci_lower: 0.86, ci_upper: 0.94, status: StratumStatus::Ok },
+            StratumResult { key: "warn".into(), n: 100, micro_f1: 0.8, ci_lower: 0.75, ci_upper: 0.85, status: StratumStatus::Ok },
+            StratumResult { key: "block".into(), n: 100, micro_f1: 0.4, ci_lower: 0.3, ci_upper: 0.5, status: StratumStatus::Ok },
+            StratumResult { key: "small".into(), n: 10, micro_f1: 0.9, ci_lower: 0.8, ci_upper: 1.0, status: StratumStatus::Ok },
+        ];
+        let got: Vec<&str> = classify_strata(&strata, &thresholds).iter().map(|s| s.status.as_str()).collect();
+        assert_eq!(got, vec!["ok", "warning", "blocker", "insufficient_n"]);
+    }
 }

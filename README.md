@@ -32,7 +32,7 @@ decided. Point estimates never gate.
 | LoRA training (`slm-eval train`) — PEFT/TRL SFT | ✅ complete |
 | vLLM serving (`slm-eval serve`, `run --auto-serve`) | ✅ code complete (requires Linux/NVIDIA) |
 | AI Data Science analysis report (`runs/<id>/viz/ai_analysis_report.json`) | ✅ complete |
-| Rust core (`slm-eval-infinity`) | ⚠️ partial: gate/scoring parity in progress, Infinity tooling not compiled |
+| Rust core (`slm-eval-infinity`) | ⚠️ partial: deterministic gate/scoring with Python parity tests; RAP runtime integration experimental (not compiled) |
 
 ## Quickstart
 

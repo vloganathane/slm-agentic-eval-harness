@@ -1,0 +1,367 @@
+{
+  "thresholds": {
+    "target_f1": 0.85,
+    "failure_threshold": 0.5,
+    "min_per_stratum": 50
+  },
+  "cases": [
+    {
+      "name": "promote",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "promote",
+        "promote": true,
+        "reason": "all_checks_passed",
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "ci_lower_blocks_point_clears",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.871,
+        "ci_lower": 0.842,
+        "ci_upper": 0.897,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "blocked",
+        "promote": false,
+        "reason": "ci_lower_below_target",
+        "blockers": [
+          "ci_lower_below_target: 0.842 < 0.85 (point 0.871 cannot gate)"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "point_alone_cannot_gate",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 1.0,
+        "ci_lower": 0.6,
+        "ci_upper": 1.0,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "blocked",
+        "promote": false,
+        "reason": "ci_lower_below_target",
+        "blockers": [
+          "ci_lower_below_target: 0.600 < 0.85 (point 1.000 cannot gate)"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "ci_lower_equal_target_promotes",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.86,
+        "ci_lower": 0.85,
+        "ci_upper": 0.87,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "promote",
+        "promote": true,
+        "reason": "all_checks_passed",
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "incomplete_run_is_error",
+      "inputs": {
+        "run_completed": false,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "error",
+        "promote": false,
+        "reason": "run_incomplete",
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "pending_review_blocks",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 3,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "blocked_pending_review",
+        "promote": false,
+        "reason": "pending_human_review",
+        "blockers": [],
+        "warnings": [
+          "pending_reviews: 3"
+        ]
+      }
+    },
+    {
+      "name": "stratum_blocker_at_failure_threshold",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [
+          {
+            "key": "layout=rotated",
+            "n": 60,
+            "micro_f1": 0.4,
+            "ci_lower": 0.3,
+            "ci_upper": 0.5
+          }
+        ],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "blocked",
+        "promote": false,
+        "reason": "stratum_blocker",
+        "blockers": [
+          "stratum_blocker: layout=rotated n=60 ci_upper=0.500"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "stratum_warning_below_target",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [
+          {
+            "key": "lang=hi",
+            "n": 60,
+            "micro_f1": 0.8,
+            "ci_lower": 0.7,
+            "ci_upper": 0.9
+          }
+        ],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "promote",
+        "promote": true,
+        "reason": "all_checks_passed",
+        "blockers": [],
+        "warnings": [
+          "stratum_below_target: lang=hi micro_f1=0.800"
+        ]
+      }
+    },
+    {
+      "name": "small_stratum_is_insufficient_n",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [
+          {
+            "key": "lang=mr",
+            "n": 10,
+            "micro_f1": 0.1,
+            "ci_lower": 0.0,
+            "ci_upper": 0.2
+          }
+        ],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "promote",
+        "promote": true,
+        "reason": "all_checks_passed",
+        "blockers": [],
+        "warnings": [
+          "insufficient_n: lang=mr n=10 < 50"
+        ]
+      }
+    },
+    {
+      "name": "kappa_missing_blocks",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": null,
+        "pending_reviews": 0,
+        "subjective_fields": [
+          "vendor_name"
+        ],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "blocked",
+        "promote": false,
+        "reason": "kappa_missing",
+        "blockers": [
+          "kappa_missing: subjective fields present but no calibration"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "kappa_low_blocks",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.7,
+        "pending_reviews": 0,
+        "subjective_fields": [
+          "vendor_name"
+        ],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "blocked",
+        "promote": false,
+        "reason": "kappa_below_target",
+        "blockers": [
+          "kappa_below_target: 0.700 < 0.85"
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "name": "kappa_not_required_without_subjective",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": null,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": null,
+        "defect_n": 0,
+        "total_n": 0
+      },
+      "expected": {
+        "status": "promote",
+        "promote": true,
+        "reason": "all_checks_passed",
+        "blockers": [],
+        "warnings": []
+      }
+    },
+    {
+      "name": "dataset_defect_is_warning_only",
+      "inputs": {
+        "run_completed": true,
+        "micro_f1": 0.87,
+        "ci_lower": 0.855,
+        "ci_upper": 0.9,
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "pending_reviews": 0,
+        "subjective_fields": [],
+        "defect_rate": 0.25,
+        "defect_n": 5,
+        "total_n": 20
+      },
+      "expected": {
+        "status": "promote",
+        "promote": true,
+        "reason": "all_checks_passed",
+        "blockers": [],
+        "warnings": [
+          "dataset_defect: 5/20 cases (25%) unextractable \u2014 excluded from micro-F1"
+        ]
+      }
+    }
+  ]
+}
