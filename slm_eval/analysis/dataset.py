@@ -84,7 +84,7 @@ class DatasetAnalyzer:
         fields_seen: set[str] = set()
         strata_dist: Counter = Counter()
         ocr_counts: Counter = Counter()
-        field_stats: Dict[str, Dict[str, Any]] = defaultdict(
+        field_stats: dict[str, dict[str, Any]] = defaultdict(
             lambda: {
                 "count": 0,
                 "distinct_values": set(),
@@ -95,7 +95,7 @@ class DatasetAnalyzer:
         text_lengths: list[int] = []
         total_text_chars: int = 0
         language_hint: str | None = None
-        item_count_dist: Dict[str, int] = {}
+        item_count_dist: dict[str, int] = {}
 
         for c in cases:
             # Strata analysis

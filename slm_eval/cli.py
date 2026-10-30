@@ -320,6 +320,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         orch = Orchestrator(
             cfg, store, run_dir, _make_judge_client(cfg, args.judge_endpoint),
             code_version=f"git:{__version__}", resume=args.resume,
+            config_path=args.config,
         )
         if args.dataset:
             dataset = args.dataset

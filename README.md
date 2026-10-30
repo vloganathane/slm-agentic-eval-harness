@@ -19,15 +19,31 @@ decided. Point estimates never gate.
 
 | Milestone | Deliverable | Status |
 |---|---|---|
-| M0 | Scaffold, config schema, SQLite store, golden fixture | pending |
-| M1 | split/seal → infer → score → CI → `gate.json` + CLI | pending |
-| M2 | Analyst, calibration tooling + κ enforcement, review queue | pending |
-| M3 | Synthetic loop, reports, provenance inspect | pending |
+| M0 | Scaffold, config schema, SQLite store, golden fixture | ✅ complete |
+| M1 | split/seal → infer → score → CI → `gate.json` + CLI | ✅ complete |
+| M2 | Analyst, calibration tooling + κ enforcement, review queue | ✅ complete |
+| M3 | Synthetic loop, reports, provenance inspect | ✅ complete |
 
-## Quickstart (after M1)
+### Extensions (beyond SPEC_V3)
+
+| Area | Status |
+|---|---|
+| Dataset pipeline (`slm-eval data`) — validate, dedup, stratified split, training format | ✅ complete |
+| LoRA training (`slm-eval train`) — PEFT/TRL SFT | ✅ complete |
+| vLLM serving (`slm-eval serve`, `run --auto-serve`) | ✅ code complete (requires Linux/NVIDIA) |
+| AI Data Science analysis report (`runs/<id>/viz/ai_analysis_report.json`) | ✅ complete |
+| Rust core (`slm-eval-infinity`) | ⚠️ partial: gate/scoring parity in progress, Infinity tooling not compiled |
+
+## Quickstart
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev]                    # core eval gate
+# optional extras:
+pip install -e .[train]                  # LoRA training (CPU/MPS)
+pip install -e .[train-gpu]              # + bitsandbytes
+pip install -e .[serve]                  # vLLM (Linux/NVIDIA)
+pip install -e .[ocr,viz]                # CORD OCR + plots
+
 slm-eval init
 slm-eval run -c eval_config.yaml --model model.gguf --dataset data/holdout/
 slm-eval gate runs/<run_id>   # exit 0 promote · 1 blocked · 2 error

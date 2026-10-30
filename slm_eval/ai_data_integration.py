@@ -15,15 +15,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import numpy as np
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Gate analysis – consume the Rust gate.json output
 # ---------------------------------------------------------------------------
 
-def analyze_gate(run_dir: Path, config_path: Path) -> Dict[str, Any]:
+def analyze_gate(run_dir: Path, config_path: Path) -> dict[str, Any]:
     """Load a gate.json file and return a structured analysis.
 
     This function is the entry point for the AI Data Science Team integration.
@@ -34,7 +32,7 @@ def analyze_gate(run_dir: Path, config_path: Path) -> Dict[str, Any]:
     - Stratum-level breakdown
     - Root cause analysis
     """
-    from slm_eval.analysis.gate import GateAnalysis, load_gate_for_analyzer
+    from slm_eval.analysis.gate import load_gate_for_analyzer
 
     # Load gate analysis (reuses existing GateAnalyzer logic)
     analyzer = load_gate_for_analyzer(run_dir, config_path)
@@ -61,7 +59,7 @@ def analyze_gate(run_dir: Path, config_path: Path) -> Dict[str, Any]:
 # Dataset analysis – quality, defect rate, OCR signal
 # ---------------------------------------------------------------------------
 
-def analyze_dataset(cases_path: Path, minhash_threshold: float = 0.6) -> Dict[str, Any]:
+def analyze_dataset(cases_path: Path, minhash_threshold: float = 0.6) -> dict[str, Any]:
     """Analyze the dataset used for evaluation.
 
     Returns a structured analysis including:
@@ -92,7 +90,7 @@ def analyze_dataset(cases_path: Path, minhash_threshold: float = 0.6) -> Dict[st
 # Error analysis – scoring results, error clusters, stratum performance
 # ---------------------------------------------------------------------------
 
-def analyze_errors(run_id: str, score_path: Path, config_path: Path) -> Dict[str, Any]:
+def analyze_errors(run_id: str, score_path: Path, config_path: Path) -> dict[str, Any]:
     """Analyze scoring results after the evaluation pipeline.
 
     Returns:
@@ -129,13 +127,41 @@ def analyze_errors(run_id: str, score_path: Path, config_path: Path) -> Dict[str
 # AI Data Science Team agents – post-evaluation analysis
 # ---------------------------------------------------------------------------
 
+def _resolve_cases_path(
+    dataset_path: Path | None,
+    run_dir: Path,
+    config_path: Path,
+) -> Path | None:
+    """Find the cases.jsonl to analyze.
+
+    Prefer the dataset actually used for the run; fall back to the sealed
+    holdout, then the conventional ``data/`` locations relative to the config.
+    """
+    candidates: list[Path] = []
+    if dataset_path is not None:
+        p = Path(dataset_path)
+        candidates.append(p / "cases.jsonl" if p.is_dir() else p)
+    candidates.extend(
+        [
+            Path(run_dir) / "holdout" / "cases.jsonl",
+            Path(config_path).parent.parent / "data" / "cases.jsonl",
+            Path(config_path).parent / "data" / "cases.jsonl",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def ai_data_integration_agent(
     run_dir: Path,
     config_path: Path,
-    score_path: Optional[Path] = None,
-    llm_base_url: Optional[str] = None,
-    llm_model: Optional[str] = None,
-) -> Dict[str, Any]:
+    dataset_path: Path | None = None,
+    score_path: Path | None = None,
+    llm_base_url: str | None = None,
+    llm_model: str | None = None,
+) -> dict[str, Any]:
     """
     Wrapper that combines AI Data Science Team agents with the existing
     analysis pipeline. This function can be called by the main pipeline
@@ -151,10 +177,10 @@ def ai_data_integration_agent(
     # 1. Gate analysis
     gate_result = analyze_gate(run_dir, config_path)
 
-    # 2. Dataset analysis (if cases.jsonl is available)
+    # 2. Dataset analysis (if a cases.jsonl is available)
     dataset_result = {}
-    cases_path = config_path.parent / "data" / "cases.jsonl"
-    if cases_path.exists():
+    cases_path = _resolve_cases_path(dataset_path, run_dir, config_path)
+    if cases_path is not None:
         dataset_result = analyze_dataset(cases_path)
 
     # 3. Error analysis (if scores.jsonl is available)
@@ -166,9 +192,9 @@ def ai_data_integration_agent(
     llm_result = {}
     if llm_base_url:
         try:
-            from slm_eval.analysis.llm_analyzer import LLMAnalyzer, OpenAICompatClient
             from slm_eval.analysis.dataset import DatasetAnalyzer
             from slm_eval.analysis.error import ErrorAnalyzer
+            from slm_eval.analysis.llm_analyzer import LLMAnalyzer, OpenAICompatClient
 
             client = OpenAICompatClient(
                 base_url=llm_base_url,
@@ -187,7 +213,7 @@ def ai_data_integration_agent(
                 ea = ErrorAnalyzer(str(score_path), str(config_path), str(run_dir))
                 error_analysis = ea.analyze()
                 llm_result["errors"] = analyzer.analyze_errors(error_analysis)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — LLM analysis is optional/advisory
             llm_result["error"] = str(e)
 
     # 5. Build a comprehensive report
@@ -216,7 +242,7 @@ def ai_data_integration_agent(
 # Visualization helpers – matplotlib / seaborn
 # ---------------------------------------------------------------------------
 
-def plot_micro_f1_trend(gate_results: List[Dict[str, Any]], output_path: Path) -> None:
+def plot_micro_f1_trend(gate_results: list[dict[str, Any]], output_path: Path) -> None:
     """Create a line plot of micro-F1 over runs.
 
     Args:
@@ -225,9 +251,8 @@ def plot_micro_f1_trend(gate_results: List[Dict[str, Any]], output_path: Path) -
     """
     try:
         import matplotlib.pyplot as plt
-        import seaborn as sns
     except ImportError:
-        print("matplotlib/seaborn not installed — skipping visualization.")
+        print("matplotlib not installed — skipping visualization.")
         return
 
     # Extract micro-F1 values
@@ -250,7 +275,7 @@ def plot_micro_f1_trend(gate_results: List[Dict[str, Any]], output_path: Path) -
     print(f"Micro-F1 trend plot saved to {output_path}")
 
 
-def plot_stratum_performance(gate_results: List[Dict[str, Any]], output_path: Path) -> None:
+def plot_stratum_performance(gate_results: list[dict[str, Any]], output_path: Path) -> None:
     """Create a bar chart of micro-F1 per stratum.
 
     Args:
@@ -295,7 +320,7 @@ def plot_stratum_performance(gate_results: List[Dict[str, Any]], output_path: Pa
     print(f"Stratum performance plot saved to {output_path}")
 
 
-def plot_defect_rate_over_time(gate_results: List[Dict[str, Any]], output_path: Path) -> None:
+def plot_defect_rate_over_time(gate_results: list[dict[str, Any]], output_path: Path) -> None:
     """Plot defect rate over runs.
 
     Args:
@@ -304,9 +329,8 @@ def plot_defect_rate_over_time(gate_results: List[Dict[str, Any]], output_path: 
     """
     try:
         import matplotlib.pyplot as plt
-        import seaborn as sns
     except ImportError:
-        print("matplotlib/seaborn not installed — skipping visualization.")
+        print("matplotlib not installed — skipping visualization.")
         return
 
     defect_rates = [r.get("defect_rate", 0.0) for r in gate_results]

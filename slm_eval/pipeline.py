@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from slm_eval import fixture
 from slm_eval.ai_data_integration import ai_data_integration_agent
@@ -20,7 +21,7 @@ from slm_eval.config import EvalConfig
 from slm_eval.errors import ConfigError, LeakageError, SlmEvalError
 from slm_eval.gate import GateInputs, StratumResult, dataset_defect_rate, decide_gate
 from slm_eval.hashing import sha256_json
-from slm_eval.judge import CalibrationGate, CalibrationStatus, Judge
+from slm_eval.judge import CalibrationStatus, Judge
 from slm_eval.llm import LLMClient
 from slm_eval.scoring import score_case
 from slm_eval.split import seal_holdout, split_stratified
@@ -40,6 +41,7 @@ class Orchestrator:
         *,
         code_version: str = "git:unknown",
         resume: bool = False,
+        config_path: str | Path | None = None,
     ) -> None:
         self.cfg = cfg
         self.store = store
@@ -47,6 +49,9 @@ class Orchestrator:
         self.judge_client = judge_client
         self.code_version = code_version
         self.resume = resume
+        # Source config path (provenance) — agents need the real file, not a
+        # hardcoded default, to read thresholds/reporting settings.
+        self.config_path = Path(config_path) if config_path is not None else None
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.run_id = self.run_dir.name
         self._events = self.run_dir / "events.jsonl"
@@ -257,7 +262,7 @@ class Orchestrator:
             self._finish("gate", h_gate, status=decision.status, promote=decision.promote)
 
         # --- AI Data Science Team post-processing (optional stage 8) ---
-        if self.cfg.reporting.formats and self.cfg.reporting.formats[0] == "json":
+        if self.config_path is not None and "json" in self.cfg.reporting.formats:
             self._post_process(dataset_path)
 
         return gate_payload
@@ -400,39 +405,37 @@ class Orchestrator:
         to provide enhanced analysis, visualization, and semantic insights.
 
         Args:
-            dataset_path: Path to the original dataset (cases.jsonl)
+            dataset_path: Path to the original dataset (cases.jsonl or its dir)
             llm_base_url: Optional LLM endpoint for semantic analysis
             llm_model: Optional LLM model name
 
         Returns:
             Dict with AI analysis results, or None if disabled
         """
+        if self.config_path is None:
+            self._emit("post_process", "skipped", level="warning",
+                       reason="no config path supplied")
+            return None
         try:
-            # Find config path (assuming it's in the standard location)
-            config_path = Path(dataset_path).parent.parent / "configs" / "cord-lean.yaml"
-            if not config_path.exists():
-                config_path = Path("configs/cord-lean.yaml")
-            if not config_path.exists():
-                self._emit("post_process", "skipped", level="warning",
-                           reason="config not found")
-                return None
-
+            cases_path = fixture.resolve_dataset_path(dataset_path)
             score_path = self.run_dir / "scores.jsonl"
             result = ai_data_integration_agent(
                 run_dir=self.run_dir,
-                config_path=config_path,
+                config_path=self.config_path,
+                dataset_path=cases_path,
                 score_path=score_path if score_path.exists() else None,
                 llm_base_url=llm_base_url,
                 llm_model=llm_model,
             )
 
-            # Write AI analysis report
-            report_path = self.run_dir / "ai_analysis_report.json"
-            import json
+            # Write AI analysis report alongside the other run artifacts.
+            report_dir = self.run_dir / "viz"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / "ai_analysis_report.json"
             report_path.write_text(json.dumps(result, indent=2))
             self._emit("post_process", "completed", report_path=str(report_path))
 
             return result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — advisory stage must never fail the run
             self._emit("post_process", "failed", level="error", error=str(e))
             return None

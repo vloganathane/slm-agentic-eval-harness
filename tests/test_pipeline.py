@@ -7,6 +7,7 @@ import pytest
 
 from slm_eval import fixture
 from slm_eval.config import EvalConfig
+from slm_eval.errors import SlmEvalError
 from slm_eval.judge import CalibrationStatus
 from slm_eval.llm import ScriptedClient
 from slm_eval.pipeline import Orchestrator
@@ -56,12 +57,12 @@ def _judge_client(gold_by_prompt_match: bool = True) -> ScriptedClient:
     return ScriptedClient(default=json.dumps({"verdict": "match", "reason": "identical"}))
 
 
-def _run(tmp_path, dataset, run_id, predictions=None, resume=False, cfg=CFG):
+def _run(tmp_path, dataset, run_id, predictions=None, resume=False, cfg=CFG, config_path=None):
     store = Store(tmp_path / "db.sqlite")
     try:
         orch = Orchestrator(
             cfg, store, tmp_path / "runs" / run_id, _judge_client(),
-            code_version="git:fixture", resume=resume,
+            code_version="git:fixture", resume=resume, config_path=config_path,
         )
         if predictions is None:
             # Fixture dev loop: the fixture's own gold plays the perfect model.
@@ -99,6 +100,24 @@ def test_gate_json_written_and_parseable(tmp_path):
         assert key in gate
 
 
+def test_post_process_writes_ai_report_with_dataset_analysis(tmp_path):
+    """Stage 8 uses the run's own config + dataset, not a hardcoded default."""
+    ds = _mk_dataset(tmp_path)
+    cfg_path = tmp_path / "eval_config.yaml"
+    CFG.to_yaml(cfg_path)
+    _run(tmp_path, ds, "run-ai", config_path=cfg_path)
+
+    report = tmp_path / "runs" / "run-ai" / "viz" / "ai_analysis_report.json"
+    assert report.exists(), "AI post-process report missing"
+    payload = json.loads(report.read_text())
+    assert payload["dataset"], "dataset analysis was empty"
+    assert payload["dataset"]["n_cases"] > 0
+    assert payload["gate"]["run_id"] == "run-ai"
+
+
+
+
+
 def test_low_quality_model_blocks_on_ci(tmp_path):
     """AC-04/AC-06: a bad model's CI lower bound stays under target → blocked."""
     ds = _mk_dataset(tmp_path, n=120)
@@ -133,7 +152,6 @@ def test_resume_skips_completed_stages(tmp_path):
     _run(tmp_path, ds, "run-resume")
     store = Store(tmp_path / "db.sqlite")
     try:
-        n_before = store._conn.execute("SELECT COUNT(*) FROM stage_checkpoint").fetchone()[0]
         # Run again against the same run dir with resume.
         orch = Orchestrator(
             CFG, store, tmp_path / "runs" / "run-resume", _judge_client(), resume=True,
@@ -203,5 +221,37 @@ def test_leakage_aborts_before_inference(tmp_path):
         with pytest.raises(LeakageError):
             orch.run(model_path="m.gguf", model_sha256="m" * 64, dataset_path=bad_ds,
                      calibration=GOOD_CAL)
+    finally:
+        store.close()
+
+
+def test_cost_cap_exceeded_fails_run_before_scoring(tmp_path):
+    """AC-09: a run whose ledger already exceeds the cap fails, not promotes."""
+    ds = _mk_dataset(tmp_path)
+    capped = _cfg_with(
+        cost_control={"max_cost_per_round_usd": 0.5, "alert_at_usd": 0.5}
+    )
+    run_id = "run-cap"
+    run_dir = tmp_path / "runs" / run_id
+    store = Store(tmp_path / "db.sqlite")
+    try:
+        store.add_cost(run_id, "prior_round", 0.75)
+        orch = Orchestrator(capped, store, run_dir, _judge_client())
+        predictions = {c["case_id"]: c["gold"] for c in fixture.read_dataset(ds)}
+
+        with pytest.raises(SlmEvalError, match="cost limit exceeded"):
+            orch.run(
+                model_path="m.gguf", model_sha256="m" * 64,
+                dataset_path=ds, predictions=predictions, calibration=GOOD_CAL,
+            )
+
+        assert not (run_dir / "gate.json").exists()
+        events = [
+            json.loads(line) for line in (run_dir / "events.jsonl").read_text().splitlines()
+        ]
+        assert any(e["stage"] == "cost_alert" and e["event"] == "warning" for e in events)
+        assert any(
+            e["stage"] == "cost_control" and e["event"] == "failed" for e in events
+        )
     finally:
         store.close()

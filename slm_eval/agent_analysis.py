@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from slm_eval.analysis.dataset import DatasetAnalyzer, DatasetAnalysis
 from slm_eval.analysis.error import ErrorAnalyzer, ErrorAnalysis
@@ -116,7 +116,7 @@ def gate_analysis_tool(gate_path: str, config_path: str, score_path: Optional[st
             "data": {
                 "run_id": analysis.run_id,
                 "passed": analysis.passed,
-                "status": gate_path and Path(gate_path).name if False else "unknown",
+                "status": "promote" if analysis.passed else "blocked",
                 "micro_f1": analysis.micro_f1,
                 "ci_lower": analysis.ci_lower,
                 "ci_upper": analysis.ci_upper,
@@ -124,7 +124,7 @@ def gate_analysis_tool(gate_path: str, config_path: str, score_path: Optional[st
                 "n": analysis.n,
                 "root_cause": analysis.root_cause,
                 "blockers": analysis.blockers,
-                "stratum_blockers": a.stratum_blockers if False else [],
+                "stratum_blockers": analysis.stratum_blockers,
                 "remediation": analysis.remediation,
                 "warnings": analysis.warnings,
             },

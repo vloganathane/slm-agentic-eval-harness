@@ -21,6 +21,30 @@ dependencies = [
 [project.scripts]
 slm-eval = "slm_eval.cli:main"
 
+[project.optional-dependencies]
+train = [
+    "torch",
+    "transformers",
+    "peft",
+    "trl",
+    "datasets",
+    "accelerate",
+    "wandb",
+]
+train-gpu = [
+    "torch",
+    "transformers",
+    "peft",
+    "trl",
+    "datasets",
+    "accelerate",
+    "wandb",
+    "bitsandbytes",
+]
+serve = ["vllm"]
+ocr = ["pytesseract", "Pillow"]
+viz = ["matplotlib", "seaborn"]
+
 [dependency-groups]
 dev = ["pytest", "ruff"]
 
