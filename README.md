@@ -18,6 +18,8 @@ decided. Point estimates never gate.
 - [SPEC_PRODUCTION.md](SPEC_PRODUCTION.md) — Evolution target (features attach when Appendix A triggers fire)
 - [CHANGELOG.md](CHANGELOG.md) — Release history
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Contribution guide
+- [SECURITY.md](SECURITY.md) — Security policy
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community standards
 
 ## Specs
 
@@ -82,3 +84,10 @@ vLLM itself ships for Linux/NVIDIA hosts; on macOS use `llama_server` or `openai
 pytest        # tests (every milestone ships tests)
 ruff check .
 ```
+
+## Community
+
+- **Issues**: [Bug reports](https://github.com/yourusername/slm-agentic-eval-harness/issues/new?template=bug_report.md) · [Feature requests](https://github.com/yourusername/slm-agentic-eval-harness/issues/new?template=feature_request.md) · [Documentation](https://github.com/yourusername/slm-agentic-eval-harness/issues/new?template=documentation.md)
+- **Security**: See [SECURITY.md](SECURITY.md) for responsible disclosure
+- **Conduct**: See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- **Contributions**: See [CONTRIBUTING.md](CONTRIBUTING.md)

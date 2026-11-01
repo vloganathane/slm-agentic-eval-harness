@@ -1,0 +1,14 @@
+# Default owners for everything in the repo
+* @yourusername
+
+# Core pipeline (pipeline.py, gate.py, scoring.py)
+/slm_eval/pipeline.py @yourusername
+/slm_eval/gate.py @yourusername
+/slm_eval/scoring.py @yourusername
+
+# Modal backend
+/slm_eval/backends/ @yourusername
+
+# Configuration
+/pyproject.toml @yourusername
+/.github/ @yourusername
