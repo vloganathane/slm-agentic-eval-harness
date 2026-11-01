@@ -1,11 +1,23 @@
 # slm-eval — Agentic Evaluation Harness for SLM Fine-Tuning
 
+[![CI](https://github.com/yourusername/slm-agentic-eval-harness/workflows/CI/badge.svg)](https://github.com/yourusername/slm-agentic-eval-harness/actions/workflows/ci.yml)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 Single-tenant, CLI-first evaluation gate for small language model fine-tuning loops:
 **model + dataset in → `gate.json` (F1 with 95% CI) + exit code out.**
 
 The gate promotes only when the *confidence interval lower bound* clears the target,
 the judge is κ-calibrated (≥ 0.85), strata show no blockers, and human reviews are
 decided. Point estimates never gate.
+
+## Documentation
+
+- [SPEC_V3.md](SPEC_V3.md) — Build contract (architecture, data model, evaluation science, M0–M3)
+- [SPEC_PRODUCTION.md](SPEC_PRODUCTION.md) — Evolution target (features attach when Appendix A triggers fire)
+- [CHANGELOG.md](CHANGELOG.md) — Release history
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Contribution guide
 
 ## Specs
 

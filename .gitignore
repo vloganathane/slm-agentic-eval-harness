@@ -8,18 +8,13 @@ venv/
 dist/
 build/
 *.egg-info/
-
-# Rust
-target/
-Cargo.lock
-*.rs.bk
+*.egg
 
 # Harness artifacts (never committed)
 slm_eval.db
 runs/
 *.gguf
 .env
-.infinity/
 
 # Local inputs (datasets, calibration labels)
 data/
@@ -27,10 +22,21 @@ calibration/*.jsonl
 
 # Tooling dirs
 .pi/
-.drupal-mcp/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+htmlcov/
+*.coverage
+
+# Modal (generated)
+modal_app.py
