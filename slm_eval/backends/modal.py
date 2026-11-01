@@ -1,5 +1,6 @@
-"""Modal GPU backend for LoRA fine-tuning.
+"""Modal GPU/CPU backend for LoRA fine-tuning.
 
+Supports both GPU (T4, A10G, A100) and CPU-only training.
 Trigger: Local inference latency unacceptable (R-4) or 7B+ model training needed.
 Per SPEC_PRODUCTION.md §11.1, Appendix A.
 """
@@ -41,7 +42,7 @@ def train_lora_on_modal(
     *,
     modal_app: str | None = None,
     modal_function: str | None = None,
-    gpu: str = "A100",
+    gpu: str = "T4",
     timeout_seconds: int = 7200,
 ) -> dict[str, Any]:
     """
@@ -55,11 +56,11 @@ def train_lora_on_modal(
         output_dir: Local directory to save adapter
         modal_app: Modal app name (default: slm-finetune)
         modal_function: Modal function name (default: train_lora)
-        gpu: GPU type (A100, H100, etc.)
+        gpu: GPU type ("T4", "A10G", "A100-40GB", "A100-80GB", "L4", "H100") or "cpu"
         timeout_seconds: Max wait time
     
     Returns:
-        Dict with adapter_path, config_path, metrics
+        Dict with adapter_path, config_path, metrics, device
     """
     if not _modal_available():
         raise RuntimeError("modal not installed. Install with: pip install modal")
@@ -87,8 +88,10 @@ def train_lora_on_modal(
     print(f"  Train data: {train_data_s3}")
     print(f"  LoRA config: {lora_config}")
     print(f"  Training args: {training_args}")
-    print(f"  GPU: {gpu}")
+    print(f"  Device: {gpu.upper() if gpu != 'cpu' else 'CPU'}")
     print(f"  Output dir: {output_dir}")
+    if gpu == "cpu":
+        print("  Note: CPU training is slow (~5hr/epoch for 1B model). Use GPU for faster training.")
 
     # Call remote function
     result = fn.remote(
@@ -206,6 +209,7 @@ class ModalDeploymentBackend:
 MODAL_APP_TEMPLATE = '''
 import modal
 import os
+import json
 
 app = modal.App("slm-finetune")
 
@@ -229,7 +233,7 @@ volume = modal.Volume.from_name("slm-models", create_if_missing=True)
 
 @app.function(
     image=image,
-    cpu=4.0,
+    gpu="T4",  # Change to "A10G", "A100", or use cpu=4.0 for CPU
     memory=16384,
     volumes={"/mnt": volume},
     timeout=7200,
@@ -250,6 +254,11 @@ def train_lora(
     from trl import SFTConfig, SFTTrainer
     import wandb
 
+    # Detect device
+    has_cuda = torch.cuda.is_available()
+    device_type = "cuda" if has_cuda else "cpu"
+    print(f"Training on device: {device_type}")
+
     # Download training data if S3
     if train_data_path.startswith("s3://"):
         import subprocess
@@ -267,13 +276,18 @@ def train_lora(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load model
-    has_cuda = torch.cuda.is_available()
-    dtype = torch.bfloat16 if has_cuda and torch.cuda.is_bf16_supported() else torch.float16
+    # Load model with appropriate dtype
+    if has_cuda:
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        device_map = "auto"
+    else:
+        dtype = torch.float32
+        device_map = None
+
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=dtype,
-        device_map="auto",
+        dtype=dtype,
+        device_map=device_map,
     )
 
     # Apply LoRA
@@ -321,12 +335,13 @@ def train_lora(
         "adapter_path": output_dir,
         "trainable_params": trainable,
         "total_params": total,
+        "device": device_type,
     }
 
 
 @app.function(
     image=image,
-    cpu=4.0,
+    cpu=4.0,  # Use GPU (gpu="T4") or CPU (cpu=4.0) for vLLM
     memory=16384,
     volumes={"/mnt": volume},
     timeout=3600,
@@ -371,10 +386,26 @@ def deploy_vllm(
 '''
 
 
-def generate_modal_app_template(output_path: str | Path) -> None:
-    """Generate Modal app template for user to deploy."""
-    Path(output_path).write_text(MODAL_APP_TEMPLATE.strip() + "\n")
-    print(f"Generated Modal app template: {output_path}")
+def generate_modal_app_template(output_path: str | Path, gpu: str = "T4") -> None:
+    """Generate Modal app template for user to deploy.
+
+    Args:
+        output_path: Path to write template file
+        gpu: GPU type ("T4", "A10G", "A100") or "cpu" for CPU-only
+    """
+    template = MODAL_APP_TEMPLATE
+    if gpu.lower() == "cpu":
+        # Replace gpu with cpu
+        template = template.replace('gpu="T4"', 'cpu=4.0, memory=16384')
+        template = template.replace('gpu="T4",  # Change to "A10G", "A100", or use cpu=4.0 for CPU', 'cpu=4.0, memory=16384,  # CPU-only (Starter plan)')
+        template = template.replace('cpu=4.0,  # Use GPU (gpu="T4") or CPU (cpu=4.0) for vLLM', 'cpu=4.0, memory=16384,  # CPU-only (vLLM needs GPU)')
+    else:
+        # Set specific GPU
+        template = template.replace('gpu="T4"', f'gpu="{gpu}"')
+        template = template.replace('gpu="T4",  # Change to "A10G", "A100", or use cpu=4.0 for CPU', f'gpu="{gpu}",  # GPU-enabled')
+
+    Path(output_path).write_text(template.strip() + "\n")
+    print(f"Generated Modal app template: {output_path} (gpu={gpu})")
     print("Deploy with: modal deploy <path>")
 
 
@@ -444,14 +475,14 @@ def _cmd_modal_generate_template(args: argparse.Namespace) -> int:
     """Generate Modal app template."""
     from slm_eval.backends.modal import generate_modal_app_template
 
-    generate_modal_app_template(args.output)
+    generate_modal_app_template(args.output, gpu=args.gpu)
     return 0
 
 
 def add_modal_subparsers(subparsers) -> None:
     """Add Modal commands to CLI."""
 
-    modal_parser = subparsers.add_parser("modal", help="Modal GPU backend commands")
+    modal_parser = subparsers.add_parser("modal", help="Modal GPU/CPU backend commands")
     modal_sub = modal_parser.add_subparsers(dest="modal_command", required=True)
 
     # modal train
@@ -465,7 +496,7 @@ def add_modal_subparsers(subparsers) -> None:
     train_parser.add_argument("--epochs", type=int, default=3)
     train_parser.add_argument("--batch-size", type=int, default=4)
     train_parser.add_argument("--lr", type=float, default=2e-4)
-    train_parser.add_argument("--gpu", default="T4")
+    train_parser.add_argument("--gpu", default="T4", choices=["T4", "A10G", "A100-40GB", "A100-80GB", "L4", "H100", "cpu"], help="GPU type or 'cpu' for CPU-only")
     train_parser.add_argument("--modal-app", default="slm-finetune")
     train_parser.add_argument("--modal-function", default="train_lora")
     train_parser.set_defaults(func=_cmd_modal_train)
@@ -473,7 +504,7 @@ def add_modal_subparsers(subparsers) -> None:
     # modal deploy
     deploy_parser = modal_sub.add_parser("deploy", help="Deploy vLLM on Modal")
     deploy_parser.add_argument("--model-path", required=True)
-    deploy_parser.add_argument("--gpu", default="T4")
+    deploy_parser.add_argument("--gpu", default="T4", choices=["T4", "A10G", "A100-40GB", "A100-80GB", "L4", "H100", "cpu"], help="GPU type (vLLM requires GPU)")
     deploy_parser.add_argument("--tensor-parallel", type=int, default=1)
     deploy_parser.add_argument("--modal-app", default="slm-finetune")
     deploy_parser.set_defaults(func=_cmd_modal_deploy)
@@ -481,4 +512,5 @@ def add_modal_subparsers(subparsers) -> None:
     # modal generate-template
     gen_parser = modal_sub.add_parser("generate-template", help="Generate Modal app template")
     gen_parser.add_argument("--output", default="modal_app.py")
+    gen_parser.add_argument("--gpu", default="T4", choices=["T4", "A10G", "A100-40GB", "A100-80GB", "L4", "H100", "cpu"], help="GPU type or 'cpu' for CPU-only")
     gen_parser.set_defaults(func=_cmd_modal_generate_template)

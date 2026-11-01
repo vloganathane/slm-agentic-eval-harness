@@ -572,12 +572,34 @@ modal secret create wandb-secret WANDB_API_KEY=...
 ### Generate Modal App
 
 ```bash
-slm-eval modal generate-template --output modal_app.py
+# Generate GPU template (default: T4)
+slm-eval modal generate-template --output modal_app.py --gpu T4
+
+# Generate CPU-only template (Starter plan, no GPU needed)
+slm-eval modal generate-template --output modal_app.py --gpu cpu
+
+# Generate A10G template
+slm-eval modal generate-template --output modal_app.py --gpu A10G
 ```
 
-### Train on Modal (Cloud GPU)
+**GPU Options:**
+
+| Option | Type | Price/Hour | Best For |
+|--------|------|-----------|----------|
+| `cpu` | CPU-only | ~$0.05/core | Small models, testing, Starter plan |
+| `T4` | GPU | ~$0.60 | 1.5B-7B LoRA training |
+| `A10G` | GPU | ~$1.10 | 7B+ models |
+| `A100-40GB` | GPU | ~$2.10 | 13B+ models |
+| `A100-80GB` | GPU | ~$2.50 | 30B+ models |
+| `L4` | GPU | ~$0.80 | Inference-optimized |
+| `H100` | GPU | ~$3.95 | Maximum performance |
+
+Note: Modal Starter plan requires payment method for GPU access. CPU-only works without payment.
+
+### Train on Modal (Cloud GPU/CPU)
 
 ```bash
+# GPU training (T4)
 slm-eval modal train \
   --base-model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
   --train-data /data/train.jsonl \
@@ -588,11 +610,34 @@ slm-eval modal train \
   --lora-r 16 \
   --lora-alpha 32 \
   --gpu T4
+
+# CPU-only training (Starter plan, no payment needed)
+slm-eval modal train \
+  --base-model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+  --train-data /data/train.jsonl \
+  --output-dir /mnt/models/lora-v1 \
+  --epochs 1 \
+  --batch-size 1 \
+  --lr 2e-4 \
+  --lora-r 8 \
+  --lora-alpha 16 \
+  --gpu cpu
 ```
+
+**Training Performance:**
+
+| Device | Model | Samples | Time/Epoch |
+|--------|-------|---------|-----------|
+| CPU (4 cores) | TinyLlama-1.1B | 79 | ~5 hours |
+| T4 GPU | TinyLlama-1.1B | 79 | ~2 minutes |
+| A10G GPU | TinyLlama-1.1B | 79 | ~1 minute |
+| T4 GPU | Qwen2.5-7B | 79 | ~10 minutes |
+| A100-40GB | Llama-3-8B | 79 | ~10 minutes |
 
 ### Deploy vLLM on Modal
 
 ```bash
+# vLLM requires GPU
 slm-eval modal deploy \
   --model-path /mnt/models/lora-v1 \
   --gpu T4 \
@@ -607,8 +652,11 @@ slm-eval modal deploy \
 | A10G | ~$1.10 |
 | A100-40GB | ~$2.10 |
 | A100-80GB | ~$2.50 |
+| L4 | ~$0.80 |
+| H100 | ~$3.95 |
+| CPU (4 cores) | ~$0.19 |
 
-Note: Modal Starter plan requires payment method for GPU access.
+Note: Modal Starter plan requires payment method for GPU access. CPU-only works without payment.
 
 ---
 
