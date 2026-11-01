@@ -1,0 +1,861 @@
+# slm-eval User Guide
+
+Complete guide to using slm-eval for evaluating and fine-tuning small language models.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Quickstart](#quickstart)
+- [Core Concepts](#core-concepts)
+- [Evaluation Pipeline](#evaluation-pipeline)
+- [Dataset Preparation](#dataset-preparation)
+- [LoRA Fine-Tuning](#lora-fine-tuning)
+- [Model Serving](#model-serving)
+- [Modal GPU Backend](#modal-gpu-backend)
+- [CLI Reference](#cli-reference)
+- [Exit Codes](#exit-codes)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+slm-eval is a CLI-first evaluation harness for small language model (SLM) fine-tuning. It implements a **gate-based evaluation** where models only promote to production when they meet statistical confidence thresholds.
+
+### Key Features
+
+- **Statistical rigor**: Micro-F1 with 95% confidence intervals (bootstrap)
+- **Gate logic**: CI lower bound must clear target — point estimates never gate
+- **Multi-strata**: Per-stratum analysis catches slice failures
+- **Reproducibility**: Deterministic splits, sealed holdout, provenance tracking
+- **LoRA fine-tuning**: Built-in PEFT/TRL training pipeline
+- **vLLM serving**: OpenAI-compatible server integration
+- **Modal cloud**: GPU training and deployment on Modal
+- **Agent contract**: Advisory lane for LLM agents (AC-11)
+
+### What Gets Evaluated
+
+```
+model + dataset → run → gate.json (F1 with 95% CI) + exit code
+                        ├─ 0 = promote (CI lower bound ≥ target)
+                        ├─ 1 = blocked (CI lower bound < target)
+                        └─ 2 = error (run failed)
+```
+
+---
+
+## Installation
+
+### Requirements
+
+- Python 3.11+
+- Optional: CUDA GPU (for training/inference acceleration)
+
+### Basic Install
+
+```bash
+git clone https://github.com/yourusername/slm-agentic-eval-harness.git
+cd slm-agentic-eval-harness
+pip install -e .
+```
+
+### With Optional Extras
+
+```bash
+# Core evaluation gate only
+pip install -e .
+
+# With development tools (pytest, ruff)
+pip install -e .[dev]
+
+# With LoRA training (CPU/MPS)
+pip install -e .[train]
+
+# With LoRA training + GPU (bitsandbytes)
+pip install -e .[train-gpu]
+
+# With vLLM serving (Linux/NVIDIA only)
+pip install -e .[serve]
+
+# With OCR + visualization
+pip install -e .[ocr,viz]
+
+# Everything
+pip install -e .[all,dev]
+```
+
+### Verify Installation
+
+```bash
+slm-eval --help
+```
+
+---
+
+## Configuration
+
+### Config Schema (YAML)
+
+Create an `eval_config.yaml`:
+
+```yaml
+# eval_config.yaml
+
+run:
+  name: "my-eval-run"
+  seed: 42
+  output_dir: "runs"
+
+dataset:
+  path: "data/holdout/"
+  format: "jsonl"  # or "json"
+
+inference:
+  backend: "openai"  # or "llama_server", "vllm"
+  model: "gpt-4"
+  api_base: "http://localhost:8000/v1"
+  temperature: 0.0
+  max_tokens: 1024
+  vllm_port: 8000
+
+judge:
+  enabled: true
+  model: "gpt-4"
+  min_kappa: 0.85
+
+gate:
+  target_f1: 0.85
+  failure_threshold: 0.5
+  min_per_stratum: 50
+  bootstrap_samples: 1000
+  confidence_level: 0.95
+
+strata:
+  keys: ["item_count", "category"]
+
+thresholds:
+  target_f1: 0.85
+  failure_threshold: 0.5
+  min_per_stratum: 50
+```
+
+### Config Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `run.name` | str | required | Human-readable run name |
+| `run.seed` | int | 42 | Random seed for reproducibility |
+| `dataset.path` | str | required | Path to dataset directory or file |
+| `dataset.format` | str | jsonl | Dataset format (jsonl, json) |
+| `inference.backend` | str | openai | Inference backend (openai, llama_server, vllm) |
+| `inference.model` | str | required | Model name or path |
+| `inference.api_base` | str | - | API base URL (for openai backend) |
+| `inference.temperature` | float | 0.0 | Sampling temperature |
+| `judge.enabled` | bool | true | Enable LLM judge for subjective fields |
+| `judge.min_kappa` | float | 0.85 | Minimum Cohen's κ for judge calibration |
+| `gate.target_f1` | float | 0.85 | Minimum F1 for promotion |
+| `gate.failure_threshold` | float | 0.5 | F1 below this = stratum blocker |
+| `gate.min_per_stratum` | int | 50 | Minimum samples per stratum for reliability |
+| `gate.bootstrap_samples` | int | 1000 | Bootstrap samples for CI calculation |
+| `strata.keys` | list[str] | [] | Fields to use for stratification |
+
+---
+
+## Quickstart
+
+### 1. Initialize
+
+```bash
+slm-eval init
+```
+
+Creates default config and directory structure:
+```
+.
+├── eval_config.yaml
+├── data/
+│   └── holdout/        # Put your dataset here
+└── runs/               # Evaluation runs appear here
+```
+
+### 2. Prepare Dataset
+
+Place your dataset in `data/holdout/` as JSONL:
+
+```json
+{"id": "case-001", "input": "Extract the total", "expected": "$123.45", "strata": {"item_count": 1}}
+{"id": "case-002", "input": "Extract vendor", "expected": "Acme Corp", "strata": {"item_count": 2}}
+```
+
+### 3. Run Evaluation
+
+```bash
+# Local model (llama.cpp)
+slm-eval run -c eval_config.yaml --model model.gguf --dataset data/holdout/
+
+# API model (OpenAI)
+slm-eval run -c eval_config.yaml --model gpt-4 --dataset data/holdout/
+
+# vLLM server (auto-launch)
+slm-eval run -c eval_config.yaml --model meta-llama/Llama-3-8B --auto-serve
+```
+
+### 4. Check Gate
+
+```bash
+slm-eval gate runs/<run_id>
+echo $?  # 0 = promote, 1 = blocked, 2 = error
+```
+
+### 5. View Results
+
+```bash
+# Gate summary
+cat runs/<run_id>/gate.json
+
+# Detailed scores
+cat runs/<run_id>/scores.jsonl
+```
+
+---
+
+## Core Concepts
+
+### Gate Logic
+
+The gate promotes a model only when **all** conditions pass:
+
+1. **Overall CI lower bound ≥ target_f1** (e.g., 0.85)
+   - Point estimate alone never gates
+   - Bootstrap CI (95%) must clear threshold
+
+2. **No stratum blockers**
+   - Any stratum with F1 < failure_threshold (0.5) = blocked
+   - Strata with n < min_per_stratum = insufficient (not blocking)
+
+3. **Judge κ ≥ min_kappa** (if subjective fields exist)
+   - Cohen's κ between judge and ground truth
+   - κ ≥ 0.85 = reliable, < 0.85 = blocked
+
+4. **No pending reviews**
+   - Human review queue must be empty
+
+5. **Run completed**
+   - All stages must finish (no errors/interruptions)
+
+### Strata Analysis
+
+Strata slice the dataset to catch failures hidden by aggregate metrics:
+
+```yaml
+strata:
+  keys: ["item_count", "category"]
+```
+
+- `item_count=1` might score 0.90
+- `item_count=5` might score 0.60 ← hidden failure!
+
+Stratum-level gates catch these slice failures.
+
+### Bootstrap CI
+
+Instead of point estimates, slm-eval uses **bootstrap resampling**:
+
+```python
+for _ in range(bootstrap_samples):
+    sample = resample(predictions, n=len(predictions))
+    f1_scores.append(micro_f1(sample))
+ci_lower, ci_upper = np.percentile(f1_scores, [2.5, 97.5])
+```
+
+This gives a 95% CI for the F1 score. The gate requires the **CI lower bound** to clear the target.
+
+### Reproducibility
+
+- **Deterministic splits**: Same seed → same train/holdout split
+- **Sealed holdout**: Holdout set never seen during training
+- **Provenance**: Full audit trail (dataset hash, config, model, timestamps)
+
+---
+
+## Evaluation Pipeline
+
+### Stages (1–7)
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ 1. Split    │───▶│ 2. Seal     │───▶│ 3. Infer    │───▶│ 4. Score    │
+│ (train/hold)│    │ (holdout)   │    │ (model)     │    │ (F1, etc.)  │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                                                               │
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
+│ 7. Report   │◀───│ 6. Gate     │◀───│ 5. CI       │◀────────┘
+│ (JSON)      │    │ (promote?)  │    │ (bootstrap) │
+└─────────────┘    └─────────────┘    └─────────────┘
+```
+
+### Stage Details
+
+| Stage | Name | Input | Output | Checkpoint |
+|-------|------|-------|--------|------------|
+| 1 | Split | Dataset | train.jsonl, holdout.jsonl | ✓ |
+| 2 | Seal | holdout.jsonl | holdout.sealed.jsonl | ✓ |
+| 3 | Infer | Model + holdout | predictions.jsonl | ✓ |
+| 4 | Score | predictions + expected | scores.jsonl | ✓ |
+| 5 | CI | scores.jsonl | ci.json | ✓ |
+| 6 | Gate | ci.json + config | gate.json | ✓ |
+| 7 | Report | All | report.json + viz/ | ✓ |
+
+Each stage writes a checkpoint file. Interrupted runs resume from last checkpoint.
+
+### Manual Stage Execution
+
+```bash
+# Run stages individually (advanced)
+slm-eval split -c eval_config.yaml
+slm-eval seal -c eval_config.yaml
+slm-eval infer -c eval_config.yaml --model model.gguf
+slm-eval score -c eval_config.yaml
+slm-eval ci -c eval_config.yaml
+slm-eval gate -c eval_config.yaml
+```
+
+### Gate JSON Output
+
+```json
+{
+  "run_id": "run-abc123",
+  "status": "promote",
+  "promote": true,
+  "overall": {
+    "micro_f1": 0.892,
+    "ci_lower": 0.867,
+    "ci_upper": 0.915,
+    "n": 200
+  },
+  "kappa": 0.91,
+  "strata": [
+    {"key": "item_count=1", "n": 120, "micro_f1": 0.93, "ci_lower": 0.89, "ci_upper": 0.96, "status": "promote"},
+    {"key": "item_count=5", "n": 80, "micro_f1": 0.84, "ci_lower": 0.78, "ci_upper": 0.89, "status": "warning"}
+  ],
+  "blockers": [],
+  "warnings": ["stratum item_count=5 below target"],
+  "thresholds": {
+    "target_f1": 0.85,
+    "failure_threshold": 0.5,
+    "min_per_stratum": 50
+  },
+  "timestamps": {
+    "started": "2024-01-01T00:00:00Z",
+    "completed": "2024-01-01T00:05:00Z"
+  }
+}
+```
+
+---
+
+## Dataset Preparation
+
+### Input Format
+
+JSONL with fields:
+
+```json
+{
+  "id": "unique-id",           // Required: unique identifier
+  "input": "...",              // Required: prompt/input text
+  "expected": "...",           // Required: ground truth
+  "strata": {"key": "value"}   // Optional: stratification
+}
+```
+
+### Data Pipeline Commands
+
+```bash
+# Validate and split a dataset
+slm-eval data \
+  --cases-dir data/raw/ \
+  --output-dir data/processed/ \
+  --strata-keys item_count category \
+  --train-ratio 0.7 \
+  --seed 42
+```
+
+This outputs:
+```
+data/processed/
+├── splits/
+│   ├── train.jsonl      # 70% training split
+│   ├── holdout.jsonl    # 30% holdout split
+│   └── split_manifest.json
+└── training_format/
+    ├── train.jsonl      # Training format (prompt + completion)
+    └── val.jsonl        # Validation split
+```
+
+### Deduplication
+
+```bash
+# Automatic deduplication (MinHash)
+slm-eval data --cases-dir data/raw/ --dedup
+```
+
+### OCR Pipeline (CORD dataset)
+
+```bash
+# Extract text from invoice images
+slm-eval ocr --images-dir data/images/ --output-dir data/ocr/
+```
+
+---
+
+## LoRA Fine-Tuning
+
+### Requirements
+
+```bash
+pip install -e .[train]       # CPU/MPS
+pip install -e .[train-gpu]   # + CUDA GPU
+```
+
+### Prepare Training Data
+
+```bash
+slm-eval data \
+  --cases-dir runs/<eval_run>/ \
+  --output-dir runs/<eval_run>/training_format/
+```
+
+### Train
+
+```bash
+slm-eval train \
+  -c eval_config.yaml \
+  --base-model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+  --dataset runs/<eval_run>/training_format/train.jsonl \
+  --output-dir checkpoints/lora-v1 \
+  --epochs 3 \
+  --batch-size 4 \
+  --learning-rate 2e-4 \
+  --lora-r 16 \
+  --lora-alpha 32 \
+  --lora-dropout 0.05
+```
+
+### Training Config
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--base-model` | required | HF model ID or local path |
+| `--dataset` | required | Training JSONL path |
+| `--output-dir` | required | Checkpoint output directory |
+| `--epochs` | 3 | Number of training epochs |
+| `--batch-size` | 4 | Per-device batch size |
+| `--gradient-accumulation` | 4 | Gradient accumulation steps |
+| `--learning-rate` | 2e-4 | Learning rate |
+| `--lora-r` | 16 | LoRA rank |
+| `--lora-alpha` | 32 | LoRA alpha (scaling factor) |
+| `--lora-dropout` | 0.05 | LoRA dropout |
+| `--warmup-steps` | 10 | Warmup steps |
+
+### Target Modules
+
+Default LoRA target modules for transformer models:
+
+```python
+target_modules = [
+    "q_proj", "v_proj", "k_proj", "o_proj",
+    "gate_proj", "up_proj", "down_proj",
+]
+```
+
+### Evaluate Trained Model
+
+```bash
+slm-eval run \
+  -c eval_config.yaml \
+  --model checkpoints/lora-v1 \
+  --dataset data/holdout/
+```
+
+---
+
+## Model Serving
+
+### vLLM (Linux/NVIDIA)
+
+```bash
+# Install vLLM
+pip install -e .[serve]
+
+# Launch server
+slm-eval serve \
+  -c eval_config.yaml \
+  --model meta-llama/Llama-3-8B-Instruct \
+  --port 8000
+```
+
+Server runs at `http://localhost:8000/v1` (OpenAI-compatible).
+
+### Auto-Serve for Evaluation
+
+```bash
+# Launch vLLM automatically around inference
+slm-eval run \
+  -c eval_config.yaml \
+  --model meta-llama/Llama-3-8B-Instruct \
+  --auto-serve
+```
+
+`--auto-serve`:
+1. Checks if server is already running on `inference.vllm_port`
+2. If not, launches vLLM
+3. Runs evaluation
+4. Shuts down server
+
+### llama.cpp (macOS/CPU)
+
+```bash
+# Start llama-server (separate terminal)
+llama-server -m model.gguf --port 8080
+
+# Point slm-eval to it
+slm-eval run -c eval_config.yaml --model model.gguf --dataset data/holdout/
+```
+
+Config:
+```yaml
+inference:
+  backend: "llama_server"
+  api_base: "http://localhost:8080/v1"
+```
+
+### OpenAI API
+
+```yaml
+inference:
+  backend: "openai"
+  model: "gpt-4"
+  api_base: "https://api.openai.com/v1"
+```
+
+Set `OPENAI_API_KEY` environment variable.
+
+---
+
+## Modal GPU Backend
+
+### Setup
+
+```bash
+pip install -e .[modal]
+
+# Authenticate with Modal
+modal token set --token-id <id> --token-secret <secret>
+```
+
+### Configure Secrets
+
+```bash
+# OpenAI (for judge)
+modal secret create openai-secret OPENAI_API_KEY=sk-...
+
+# Hugging Face (for model download)
+modal secret create hf-secret HF_TOKEN=hf_...
+
+# Weights & Biases (optional logging)
+modal secret create wandb-secret WANDB_API_KEY=...
+```
+
+### Generate Modal App
+
+```bash
+slm-eval modal generate-template --output modal_app.py
+```
+
+### Train on Modal (Cloud GPU)
+
+```bash
+slm-eval modal train \
+  --base-model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+  --train-data /data/train.jsonl \
+  --output-dir /mnt/models/lora-v1 \
+  --epochs 3 \
+  --batch-size 8 \
+  --lr 2e-4 \
+  --lora-r 16 \
+  --lora-alpha 32 \
+  --gpu T4
+```
+
+### Deploy vLLM on Modal
+
+```bash
+slm-eval modal deploy \
+  --model-path /mnt/models/lora-v1 \
+  --gpu T4 \
+  --tensor-parallel 1
+```
+
+### Modal Pricing
+
+| GPU | Price/Hour |
+|-----|-----------|
+| T4 | ~$0.60 |
+| A10G | ~$1.10 |
+| A100-40GB | ~$2.10 |
+| A100-80GB | ~$2.50 |
+
+Note: Modal Starter plan requires payment method for GPU access.
+
+---
+
+## CLI Reference
+
+### Core Commands
+
+| Command | Description |
+|---------|-------------|
+| `slm-eval init` | Initialize project structure and config |
+| `slm-eval run -c <config>` | Run full evaluation pipeline |
+| `slm-eval gate <run_id>` | Check gate status for a run |
+
+### Dataset Commands
+
+| Command | Description |
+|---------|-------------|
+| `slm-eval data --cases-dir <dir>` | Validate, dedup, stratified split |
+| `slm-eval ocr --images-dir <dir>` | Extract text from images (OCR) |
+
+### Training Commands
+
+| Command | Description |
+|---------|-------------|
+| `slm-eval train -c <config>` | LoRA fine-tune (PEFT/TRL) |
+| `slm-eval serve -c <config>` | Launch vLLM server |
+| `slm-eval run -c <config> --auto-serve` | Run with auto vLLM management |
+
+### Modal Commands
+
+| Command | Description |
+|---------|-------------|
+| `slm-eval modal generate-template` | Generate Modal app template |
+| `slm-eval modal train` | Train on Modal GPU |
+| `slm-eval modal deploy` | Deploy vLLM on Modal |
+
+### Analysis Commands
+
+| Command | Description |
+|---------|-------------|
+| `slm-eval gate-analysis <run_id>` | Detailed gate analysis |
+| `slm-eval error-analysis <run_id>` | Error breakdown |
+| `slm-eval provenance <run_id>` | Audit trail |
+
+---
+
+## Exit Codes
+
+| Code | Meaning | When |
+|------|---------|------|
+| `0` | **Promote** | CI lower bound ≥ target, no blockers |
+| `1` | **Blocked** | CI lower bound < target, or stratum/kappa failure |
+| `2` | **Error** | Run failed (config error, missing model, etc.) |
+
+### CI Integration
+
+```bash
+slm-eval run -c config.yaml --model model.gguf --dataset data/holdout/
+exit_code=$?
+
+if [ $exit_code -eq 0 ]; then
+  echo "Model promoted to production"
+  deploy_model.sh
+elif [ $exit_code -eq 1 ]; then
+  echo "Model blocked — does not meet quality bar"
+  exit 1
+else
+  echo "Evaluation error"
+  exit 2
+fi
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### "Model not found"
+
+```bash
+# Check model path
+ls -la model.gguf
+
+# For HF models, ensure download completes
+huggingface-cli download <model-id>
+```
+
+#### "Dataset not found"
+
+```bash
+# Check dataset path in config
+cat eval_config.yaml | grep -A2 dataset
+
+# Ensure files exist
+ls data/holdout/
+```
+
+#### "vLLM not available"
+
+```bash
+# vLLM requires Linux/NVIDIA
+python -c "import vllm"
+
+# On macOS, use llama_server backend
+# eval_config.yaml:
+# inference:
+#   backend: "llama_server"
+```
+
+#### "Gate blocked — κ too low"
+
+Judge is unreliable. Options:
+
+1. Increase calibration data:
+   ```bash
+   slm-eval calibrate --judge-model gpt-4 --n-samples 50
+   ```
+
+2. Use different judge model (e.g., GPT-4 instead of GPT-3.5)
+
+3. Review subjective fields for ambiguity
+
+#### "Gate blocked — stratum failure"
+
+```bash
+# Check which strata failed
+cat runs/<run_id>/gate.json | jq '.strata[] | select(.status == "blocked")'
+```
+
+Options:
+- Add more training data for failing strata
+- Increase `min_per_stratum` to ignore small strata
+- Lower `failure_threshold` if acceptable
+
+#### "Modal training timeout"
+
+Training on CPU-only Modal is slow (~5hr/epoch for 1B model).
+
+Options:
+1. Add payment method for GPU access (T4/A10G)
+2. Reduce epochs: `--epochs 1`
+3. Use smaller model (e.g., Qwen2.5-0.5B)
+
+#### "CUDA out of memory"
+
+```bash
+# Reduce batch size
+slm-eval train --batch-size 1 --gradient-accumulation 16
+
+# Use gradient checkpointing (default: enabled)
+
+# Use smaller LoRA rank
+slm-eval train --lora-r 8
+```
+
+### Debug Mode
+
+```bash
+# Verbose logging
+slm-eval run -c config.yaml --verbose
+
+# Run with fixture (no model inference)
+slm-eval run -c config.yaml --fixture-gold
+```
+
+### Check Run Status
+
+```bash
+# List all runs
+ls runs/
+
+# Check run checkpoint
+ls runs/<run_id>/
+
+# View run manifest
+cat runs/<run_id>/run_manifest.json
+```
+
+### Contact Support
+
+- **Issues**: [GitHub Issues](https://github.com/yourusername/slm-agentic-eval-harness/issues)
+- **Security**: See [SECURITY.md](../SECURITY.md)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/slm-agentic-eval-harness/discussions)
+
+---
+
+## Appendix
+
+### Example Dataset (CORD Invoices)
+
+```json
+{"id": "inv-001", "input": "Extract invoice total from: Total: $1,234.56", "expected": "1234.56", "strata": {"item_count": 3}}
+{"id": "inv-002", "input": "Extract vendor: Vendor: Acme Corp", "expected": "Acme Corp", "strata": {"item_count": 1}}
+```
+
+### Example Config (Full)
+
+```yaml
+run:
+  name: "invoice-extraction-v1"
+  seed: 42
+  output_dir: "runs"
+
+dataset:
+  path: "data/holdout/"
+  format: "jsonl"
+
+inference:
+  backend: "vllm"
+  model: "meta-llama/Llama-3-8B-Instruct"
+  api_base: "http://localhost:8000/v1"
+  temperature: 0.0
+  max_tokens: 512
+  vllm_port: 8000
+
+judge:
+  enabled: true
+  model: "gpt-4"
+  min_kappa: 0.85
+  subjective_fields: ["vendor_name", "description"]
+
+gate:
+  target_f1: 0.85
+  failure_threshold: 0.5
+  min_per_stratum: 50
+  bootstrap_samples: 1000
+  confidence_level: 0.95
+
+strata:
+  keys: ["item_count", "category"]
+
+thresholds:
+  target_f1: 0.85
+  failure_threshold: 0.5
+  min_per_stratum: 50
+```
+
+### Performance Benchmarks
+
+| Model | Size | Hardware | Time/Epoch |
+|-------|------|----------|-----------|
+| TinyLlama-1.1B | 1.1B | T4 GPU | ~2 min (79 samples) |
+| TinyLlama-1.1B | 1.1B | M1 MPS | ~3 min (79 samples) |
+| Qwen2.5-1.5B | 1.5B | A10G | ~2 min (79 samples) |
+| Llama-3-8B | 8B | A100-40GB | ~10 min (79 samples) |
+
+### License
+
+MIT License — see [LICENSE](../LICENSE)

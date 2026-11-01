@@ -14,6 +14,7 @@ decided. Point estimates never gate.
 
 ## Documentation
 
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — Complete user guide (installation, configuration, usage)
 - [SPEC_V3.md](SPEC_V3.md) — Build contract (architecture, data model, evaluation science, M0–M3)
 - [SPEC_PRODUCTION.md](SPEC_PRODUCTION.md) — Evolution target (features attach when Appendix A triggers fire)
 - [CHANGELOG.md](CHANGELOG.md) — Release history
@@ -63,6 +64,8 @@ slm-eval init
 slm-eval run -c eval_config.yaml --model model.gguf --dataset data/holdout/
 slm-eval gate runs/<run_id>   # exit 0 promote · 1 blocked · 2 error
 ```
+
+For detailed setup, configuration, and usage, see the [User Guide](docs/USER_GUIDE.md).
 
 ## Train → evaluate → serve
 
