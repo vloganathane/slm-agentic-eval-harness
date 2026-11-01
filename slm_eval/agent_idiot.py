@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-import yaml
 from pathlib import Path
 from typing import Any
 
-from slm_eval.idiot_index import IdiotFinding, IdiotReport, run_idiot_index
+import yaml
+
+from slm_eval.idiot_index import run_idiot_index
 
 
 def idiot_index_tool(config_path: str) -> dict[str, Any]:
@@ -85,10 +86,9 @@ def idiot_index_config_patch(config_path: str) -> dict[str, Any]:
                 if cfg.get("cost_control", {}).get("max_cost_per_round_usd", 0) > 0:
                     patches.append({"op": "replace", "path": "/cost_control/max_cost_per_round_usd", "value": 0.0})
                     patches.append({"op": "replace", "path": "/cost_control/alert_at_usd", "value": 0.0})
-            elif f.component == "human_review":
+            elif f.component == "human_review" and cfg.get("human_review", {}).get("timeout_hours", 0) > 0:
                 # Disable advisory lane
-                if cfg.get("human_review", {}).get("timeout_hours", 0) > 0:
-                    patches.append({"op": "replace", "path": "/human_review/timeout_hours", "value": 0})
+                patches.append({"op": "replace", "path": "/human_review/timeout_hours", "value": 0})
 
     return {"patches": patches, "config_path": config_path}
 

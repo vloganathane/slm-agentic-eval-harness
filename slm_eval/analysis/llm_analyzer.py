@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from slm_eval.analysis.dataset import DatasetAnalysis, DatasetAnalyzer
 from slm_eval.analysis.error import ErrorAnalysis, ErrorAnalyzer
 from slm_eval.analysis.gate import GateAnalysis, GateAnalyzer
-from slm_eval.llm import LLMClient, LLMResponse, OpenAICompatClient
-
+from slm_eval.llm import LLMClient, OpenAICompatClient
 
 # --- LLM Analysis Prompts ----------------------------------------------------
 
@@ -125,7 +124,7 @@ class LLMAnalyzer:
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    def analyze_dataset(self, analysis: DatasetAnalysis) -> Dict[str, Any]:
+    def analyze_dataset(self, analysis: DatasetAnalysis) -> dict[str, Any]:
         """Run LLM semantic analysis on dataset analysis results."""
         prompt = DATASET_ANALYSIS_PROMPT.format(
             n_cases=analysis.n_cases,
@@ -139,7 +138,7 @@ class LLMAnalyzer:
         resp = self.client.complete(prompt, json_mode=True, temperature=self.temperature)
         return self._parse_json_response(resp.text)
 
-    def analyze_errors(self, analysis: ErrorAnalysis) -> Dict[str, Any]:
+    def analyze_errors(self, analysis: ErrorAnalysis) -> dict[str, Any]:
         """Run LLM semantic analysis on error analysis results."""
         # Summarize error clusters by category
         cluster_summary = {}
@@ -180,7 +179,7 @@ class LLMAnalyzer:
         resp = self.client.complete(prompt, json_mode=True, temperature=self.temperature)
         return self._parse_json_response(resp.text)
 
-    def analyze_gate(self, analysis: GateAnalysis) -> Dict[str, Any]:
+    def analyze_gate(self, analysis: GateAnalysis) -> dict[str, Any]:
         """Run LLM semantic analysis on gate decision."""
         prompt = GATE_ANALYSIS_PROMPT.format(
             run_id=analysis.run_id,
@@ -199,13 +198,12 @@ class LLMAnalyzer:
         resp = self.client.complete(prompt, json_mode=True, temperature=self.temperature)
         return self._parse_json_response(resp.text)
 
-    def _parse_json_response(self, text: str) -> Dict[str, Any]:
+    def _parse_json_response(self, text: str) -> dict[str, Any]:
         """Parse LLM JSON response with code fence tolerance."""
         s = text.strip()
         if s.startswith("```"):
             s = s.split("\n", 1)[1] if "\n" in s else s
-            if s.endswith("```"):
-                s = s[: -len("```")]
+            s = s.removesuffix("```")
             s = s.strip()
         try:
             return json.loads(s)
@@ -242,7 +240,7 @@ def run_llm_analysis_pipeline(
     run_dir: str | None = None,
     llm_base_url: str = "http://127.0.0.1:8080/v1",
     llm_model: str = "qwen2.5-1.5b-instruct",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Run complete LLM-enhanced analysis pipeline.
     

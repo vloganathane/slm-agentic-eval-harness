@@ -72,7 +72,7 @@ def test_calibration_gate_passes_high_kappa():
     human = ["match", "mismatch"] * 30
     judge = list(human)
     status = gate.evaluate(human, judge)
-    blocked, reason = gate.blocks_promotion(status)
+    blocked, _reason = gate.blocks_promotion(status)
     assert not blocked and status.kappa == pytest.approx(1.0)
 
 

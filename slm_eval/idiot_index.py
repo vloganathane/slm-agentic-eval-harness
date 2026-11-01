@@ -8,12 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
-import yaml
 
 from slm_eval.config import EvalConfig
-from slm_eval.errors import SlmEvalError
 
 
 @dataclass(frozen=True)
@@ -126,7 +122,7 @@ def _audit_bootstrap(cfg: EvalConfig) -> IdiotFinding | None:
 
 def _audit_judge_scope(cfg: EvalConfig) -> IdiotFinding | None:
     # If all fields are subjective → judge everything → expensive + κ required
-    all_fields = set(cfg.fields.exact_match_fields) | set(cfg.fields.subjective_fields)
+    set(cfg.fields.exact_match_fields) | set(cfg.fields.subjective_fields)
     if len(cfg.fields.exact_match_fields) == 0 and cfg.fields.subjective_fields:
         return IdiotFinding(
             severity="cut",

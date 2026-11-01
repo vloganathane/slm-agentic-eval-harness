@@ -118,8 +118,9 @@ def _as_validator(validator: Any) -> Any:
     if validator is None or hasattr(validator, "type"):
         return validator
     if isinstance(validator, dict):
-        from slm_eval.config import FieldValidatorSpec
         from pydantic import TypeAdapter
+
+        from slm_eval.config import FieldValidatorSpec
 
         try:
             return TypeAdapter(FieldValidatorSpec).validate_python(validator)

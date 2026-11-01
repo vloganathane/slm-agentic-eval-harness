@@ -179,10 +179,9 @@ OUTPUT: Final gate.json with decision, CI, strata breakdown
 # ============================================================
 
 import json
-import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Awaitable
-from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -223,7 +222,7 @@ class MockInfinityRuntime:
             # Agent WAKES, continues
             result = await self.tools[name](args)
             return ToolResult(call_id=call_id, result=result)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - tool must return a structured error, not raise
             return ToolResult(call_id=call_id, error=str(e))
     
     async def run_orchestrator(self, config: dict) -> dict:
@@ -231,7 +230,7 @@ class MockInfinityRuntime:
         Main orchestration logic - this is what the Infinity agent would execute.
         """
         run_id = config.get("run_id", "eval-1")
-        dataset_path = config["dataset"]
+        config["dataset"]
         model_path = config["model"]
         holdout_dir = f"runs/{run_id}/holdout"
         
@@ -315,7 +314,7 @@ class MockInfinityRuntime:
         }, "call-6")
         
         # Human review
-        review_result = await self.call_tool("human_review", {
+        await self.call_tool("human_review", {
             "run_id": run_id,
             "cases": dedup_result.result.get("novel_cases", []),
             "reason": "synthetic_injection"

@@ -32,7 +32,7 @@ def sha256_dir(path: str | Path) -> str:
     files = sorted(p for p in root.rglob("*") if p.is_file())
     for p in files:
         rel = p.relative_to(root).as_posix()
-        h.update(f"{rel}:{sha256_file(p)}\n".encode("utf-8"))
+        h.update(f"{rel}:{sha256_file(p)}\n".encode())
     return h.hexdigest()
 
 
@@ -75,8 +75,7 @@ def minhash_signature(text: str, num_perm: int = 128, k: int = 5) -> list[int]:
         for i, perm in enumerate(_MINHASH_PERMUTATIONS[:num_perm]):
             # Universal hashing: (a * x + b) mod p
             h = (perm * s + i) % _MINHASH_PRIME
-            if h < sig[i]:
-                sig[i] = h
+            sig[i] = min(sig[i], h)
     return sig
 
 

@@ -6,11 +6,11 @@ Answers: Why did the model fail? Which fields/strata? Root cause attribution?
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-from slm_eval.stats import bootstrap_micro_f1, micro_f1
+from slm_eval.stats import bootstrap_micro_f1
 
 
 class ErrorAnalysis:
@@ -30,11 +30,11 @@ class ErrorAnalysis:
         f1_lower: float,
         f1_upper: float,
         kappa: float | None,
-        error_clusters: List[Dict[str, Any]],
-        stratum_perf: Dict[str, Dict[str, float]],
+        error_clusters: list[dict[str, Any]],
+        stratum_perf: dict[str, dict[str, float]],
         defect_rate: float,
         defect_n: int,
-        recommendations: List[str],
+        recommendations: list[str],
     ):
         self.run_id = run_id
         self.score_path = str(score_path)
@@ -66,10 +66,10 @@ class ErrorAnalyzer:
         self.score_path = Path(score_path)
         self.config_path = Path(config_path)
         self.run_id = run_id
-        self._scores: List[Dict[str, Any]] | None = None
-        self._cases: List[Dict[str, Any]] | None = None
+        self._scores: list[dict[str, Any]] | None = None
+        self._cases: list[dict[str, Any]] | None = None
 
-    def _load_scores(self) -> List[Dict[str, Any]]:
+    def _load_scores(self) -> list[dict[str, Any]]:
         if self._scores is None:
             self._scores = []
             with self.score_path.open() as f:
@@ -80,7 +80,7 @@ class ErrorAnalyzer:
                     self._scores.append(json.loads(line))
         return self._scores
 
-    def _load_cases(self) -> List[Dict[str, Any]]:
+    def _load_cases(self) -> list[dict[str, Any]]:
         if self._cases is None:
             self._cases = []
             cases_path = self.config_path.parent / "cases.jsonl"
@@ -98,13 +98,13 @@ class ErrorAnalyzer:
                         self._cases.append(json.loads(line))
         return self._cases
 
-    def _get_strata_key(self, case: Dict[str, Any]) -> str:
+    def _get_strata_key(self, case: dict[str, Any]) -> str:
         strata = case.get("strata", {})
         if isinstance(strata, dict):
             return ",".join(f"{k}={v}" for k, v in sorted(strata.items()))
         return "no_strata"
 
-    def _case_by_id(self, case_id: str, cases: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    def _case_by_id(self, case_id: str, cases: list[dict[str, Any]]) -> dict[str, Any] | None:
         for c in cases:
             if c.get("case_id") == case_id:
                 return c
@@ -119,10 +119,10 @@ class ErrorAnalyzer:
 
         total_tp = total_fp = total_fn = 0
         n_fields = set()
-        field_outcomes: Dict[str, List[Tuple[int, int, int]]] = defaultdict(list)
-        stratum_outcomes: Dict[str, List[Tuple[int, int, int]]] = defaultdict(list)
+        field_outcomes: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
+        stratum_outcomes: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
 
-        error_clusters: List[Dict[str, Any]] = []
+        error_clusters: list[dict[str, Any]] = []
 
         for s in scores:
             case_id = s.get("case_id")
@@ -179,7 +179,7 @@ class ErrorAnalyzer:
         ]
         try:
             ci_metric = bootstrap_micro_f1(outcomes, resamples=10_000)
-        except Exception:
+        except Exception:  # noqa: BLE001 - bootstrap failure: return neutral CI
             ci_metric = type("M", (), {"point": 0.0, "ci_lower": 0.0, "ci_upper": 0.0, "n": 0, "resamples": 10000})()
 
         # Stratum performance normalized
@@ -202,7 +202,7 @@ class ErrorAnalyzer:
 
         # Defect rate: cases with all-zero TP (complete extraction failure)
         # Group scores by case_id and count defects
-        case_correctness: Dict[str, bool] = {}
+        case_correctness: dict[str, bool] = {}
         for s in scores:
             case_id = s.get("case_id")
             tp = s.get("tp", outcome.get("tp", 0)) if case_id else None
@@ -238,7 +238,7 @@ class ErrorAnalyzer:
         )[:2]
         if high_fn_strata:
             recommendations.append(
-                f"Strata with highest FN rate: "
+                "Strata with highest FN rate: "
                 + ", ".join(f"{k} ({v['fn_pct']:.1%} FN)" for k, v in high_fn_strata)
             )
 
@@ -285,7 +285,7 @@ class ErrorAnalyzer:
             f"  Kappa: {a.kappa if a.kappa is not None else 'N/A'}",
             f"  Defect rate: {a.defect_rate:.1%} ({a.defect_n} cases)",
             f"  Error clusters: {len(a.error_clusters)}",
-            f"  Strata performance (top 3 by FN):",
+            "  Strata performance (top 3 by FN):",
         ]
         for strata, p in sorted(
             a.stratum_perf.items(), key=lambda x: x[1]["fn_pct"], reverse=True

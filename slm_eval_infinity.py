@@ -12,10 +12,9 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Default configuration
 DEFAULT_CONFIG = {
@@ -48,7 +47,7 @@ DEFAULT_CONFIG = {
     }
 }
 
-def load_config(config_path: Optional[str]) -> Dict[str, Any]:
+def load_config(config_path: str | None) -> dict[str, Any]:
     """Load configuration from file or use defaults."""
     config = DEFAULT_CONFIG.copy()
     if config_path and os.path.exists(config_path):
@@ -71,7 +70,7 @@ def run_infinity_daemon(daemon_config: str = "infinity-daemon.toml") -> subproce
         if resp.status_code == 200:
             print("Infinity daemon already running")
             return None
-    except:
+    except Exception:  # noqa: BLE001, S110 - daemon not running yet
         pass
     
     # Start the daemon
@@ -91,17 +90,17 @@ def run_infinity_daemon(daemon_config: str = "infinity-daemon.toml") -> subproce
             if resp.status_code == 200:
                 print("Infinity daemon started")
                 return proc
-        except:
+        except Exception:  # noqa: BLE001, S112 - daemon not ready yet
             continue
     
     # If we get here, daemon failed to start
     stdout, stderr = proc.communicate(timeout=5)
-    print(f"Daemon failed to start:")
+    print("Daemon failed to start:")
     print(f"stdout: {stdout.decode()}")
     print(f"stderr: {stderr.decode()}")
     return None
 
-def stop_infinity_daemon(proc: Optional[subprocess.Popen]):
+def stop_infinity_daemon(proc: subprocess.Popen | None):
     """Stop the Infinity daemon."""
     if proc:
         proc.terminate()
@@ -111,7 +110,7 @@ def stop_infinity_daemon(proc: Optional[subprocess.Popen]):
             proc.kill()
             proc.wait()
 
-async def run_evaluation(run_id: str, dataset_path: str, config: Dict[str, Any], database: str) -> int:
+async def run_evaluation(run_id: str, dataset_path: str, config: dict[str, Any], database: str) -> int:
     """Run the evaluation pipeline using Infinity agent."""
     # This would use the Infinity agent to run the full pipeline
     # For now, we'll delegate to the Rust binary if available
@@ -134,7 +133,7 @@ async def run_evaluation(run_id: str, dataset_path: str, config: Dict[str, Any],
             cmd.extend(["--model", config["model"]["model"]])
         
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: ASYNC221 - blocking in async is OK here
         print(result.stdout)
         if result.stderr:
             print(result.stderr, file=sys.stderr)
@@ -180,7 +179,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     elif args.action == "reject":
         cmd.extend(["reject", args.task_id])
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     print(result.stdout)
     if result.stderr:
         print(result.stderr, file=sys.stderr)
@@ -204,7 +203,7 @@ def cmd_adapt_cord(args: argparse.Namespace) -> int:
         "--holdout-dir", args.holdout_dir
     ]
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     print(result.stdout)
     if result.stderr:
         print(result.stderr, file=sys.stderr)
@@ -219,7 +218,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             return 0
         return 1
     elif args.action == "stop":
-        subprocess.run(["infinity", "daemon", "stop"])
+        subprocess.run(["infinity", "daemon", "stop"], check=False)
         return 0
     elif args.action == "status":
         try:
@@ -231,7 +230,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             else:
                 print("Daemon not responding")
                 return 1
-        except:
+        except Exception:  # noqa: BLE001 - daemon not running
             print("Daemon not running")
             return 1
 

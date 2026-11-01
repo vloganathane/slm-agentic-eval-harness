@@ -8,9 +8,10 @@ raises ``StateConflict`` on mismatch.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Self
 
 from slm_eval.errors import SealedArtifactError, StateConflict
 
@@ -85,7 +86,7 @@ class Store:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self) -> Store:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

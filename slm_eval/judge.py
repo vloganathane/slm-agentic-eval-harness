@@ -142,8 +142,11 @@ class CalibrationStatus:
         return not _is_nan(self.kappa)
 
 
+import math
+
+
 def _is_nan(x: float) -> bool:
-    return x != x
+    return math.isnan(x)
 
 
 class CalibrationGate:

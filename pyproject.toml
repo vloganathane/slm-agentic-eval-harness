@@ -41,6 +41,7 @@ train-gpu = [
     "wandb",
     "bitsandbytes",
 ]
+modal = ["modal"]
 serve = ["vllm"]
 ocr = ["pytesseract", "Pillow"]
 viz = ["matplotlib", "seaborn"]

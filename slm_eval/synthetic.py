@@ -110,10 +110,9 @@ def _fetch_real_merchants(client: LLMClient | WebSearchProvider | None, cfg) -> 
                 content = r.get("content", "").lower()
                 # Look for merchant names in content
                 for merchant in DEFAULT_MERCHANTS:
-                    if merchant["name"].lower() in content:
-                        if merchant not in merchants:
-                            merchants.append(merchant)
-    except Exception:
+                    if merchant["name"].lower() in content and merchant not in merchants:
+                        merchants.append(merchant)
+    except Exception:  # noqa: BLE001, S110 - web search failure, fall back to defaults
         pass  # Fall back to defaults
     
     return merchants
@@ -158,8 +157,8 @@ def _generate_with_llm(client: LLMClient, prompt: str, temperature: float = 0.8,
     
     Uses a short timeout to fall back quickly to template generation if LLM is slow.
     """
-    import threading
     import queue
+    import threading
     
     result_queue = queue.Queue()
     
@@ -172,7 +171,7 @@ def _generate_with_llm(client: LLMClient, prompt: str, temperature: float = 0.8,
                 result_queue.put(proposed)
             else:
                 result_queue.put(None)
-        except Exception as e:
+        except Exception:  # noqa: BLE001 - LLM failure, fall back to templates
             result_queue.put(None)
     
     thread = threading.Thread(target=worker)
@@ -197,7 +196,6 @@ def _generate_from_templates(merchants: list[dict], n_propose: int) -> list[dict
         name = merchant["name"]
         items = merchant["items"]
         # Create varied formats
-        import random
         layout = random.choice(["itemized", "simple", "mixed"])
         quality = random.choice(["high", "medium", "low"])
         
@@ -260,7 +258,6 @@ def generate_synthetic_cases(
     """
     # Create web-enabled client if requested
     if use_web and client is None:
-        from slm_eval.config import InferenceConfig
         client = WebEnabledClient(
             base_url=cfg.inference.base_url,
             model=model or "synthetic-generator",
@@ -270,7 +267,6 @@ def generate_synthetic_cases(
             web_search_api_key=web_api_key,
         )
     elif client is None:
-        from slm_eval.config import InferenceConfig
         client = OpenAICompatClient(
             base_url=cfg.inference.base_url,
             model=model or "synthetic-generator",
@@ -387,7 +383,6 @@ def resolve_synthetic_review(
 # Convenience CLI
 if __name__ == "__main__":
     import argparse
-    import sys
 
     p = argparse.ArgumentParser(description="Generate synthetic cases")
     p.add_argument("--config", required=True)

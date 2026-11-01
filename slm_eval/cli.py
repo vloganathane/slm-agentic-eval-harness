@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from slm_eval import __version__, fixture
+from slm_eval.backends.modal import add_modal_subparsers
 from slm_eval.config import EvalConfig
 from slm_eval.errors import SlmEvalError
 from slm_eval.idiot_index import run_idiot_index
@@ -701,6 +702,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--web-provider", default="tavily", help="Web search provider (tavily, exa, etc.)")
     c.add_argument("--web-api-key", help="Web search API key (or set PROVIDER_API_KEY env var)")
     c.set_defaults(func=_cmd_synthetic_loop)
+
+    # Modal GPU backend (Appendix A trigger: local inference too slow)
+    add_modal_subparsers(sub)
 
     return p
 

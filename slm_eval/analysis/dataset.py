@@ -237,10 +237,11 @@ class DatasetAnalyzer:
             return "Indonesian"
 
         # Arabic numerals + Arabic script markers
-        if any(char in text for char in "١٢٣٤٥٦٧٨٩٠"):
-            if any(char in text for char in "ابتثجح خدغ عפ"):
-                return "Arabic"
-            # Could be English/Arabic mixed with numbers
+        if any(char in text for char in "١٢٣٤٥٦٧٨٩٠") and any(
+            char in text for char in "ابتثجح خدغ عפ"
+        ):
+            return "Arabic"
+        # Could be English/Arabic mixed with numbers
 
         # Simple English heuristic
         if text.isascii() and any(c.isalpha() for c in text):
@@ -272,8 +273,8 @@ def quick_dataset_summary(cases_path: str | Path) -> str:
         f"  Top difficult fields: {a.top_difficult_fields[:5]}",
         f"  Duplicate pairs: {len(a.duplicate_pairs)}",
         f"  Language hint: {a.language_hint or 'undetermined'}",
-        f"  Text stats: mean={a.text_stats['mean_length']} chars, "
-        f"min={a.text_stats['min_length']}, max={a.text_stats['max_length']}",
+        (f"  Text stats: mean={a.text_stats['mean_length']} chars, "
+        f"min={a.text_stats['min_length']}, max={a.text_stats['max_length']}"),
         f"  Item count distribution: {dict(a.item_count_dist)}",
     ]
 
@@ -295,7 +296,6 @@ def quick_dataset_summary(cases_path: str | Path) -> str:
 # --- CLI ---
 if __name__ == "__main__":
     import argparse
-    import sys
 
     p = argparse.ArgumentParser(description="SLM Dataset Analysis Tool")
     p.add_argument("cases_path", help="Path to cases.jsonl")

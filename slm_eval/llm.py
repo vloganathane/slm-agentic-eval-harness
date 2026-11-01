@@ -60,9 +60,11 @@ class WebSearchProvider:
     def _check_crw_available(self) -> bool:
         """Check if crw CLI is available."""
         try:
-            result = subprocess.run(["crw", "--version"], capture_output=True, timeout=5)
+            result = subprocess.run(
+                ["crw", "--version"], capture_output=True, timeout=5, check=True
+            )
             return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
             return False
     
     def search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
@@ -73,7 +75,7 @@ class WebSearchProvider:
                     {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("content", "")}
                     for r in results.get("results", [])
                 ]
-            except Exception:
+            except Exception:  # search failure: fall through to next provider  # noqa: S110, BLE001
                 pass
         elif self.provider == "crw" and self._client:
             try:
@@ -83,7 +85,7 @@ class WebSearchProvider:
                 if self.api_key:
                     env["CRW_API_KEY"] = self.api_key
                 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env, check=True)
                 if result.returncode == 0 and result.stdout.strip():
                     data = json.loads(result.stdout)
                     # crw returns JSON array or object with results
@@ -97,7 +99,7 @@ class WebSearchProvider:
                             {"title": r.get("title", ""), "url": r.get("url", ""), "content": r.get("snippet", r.get("content", ""))}
                             for r in data["results"]
                         ]
-            except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, subprocess.CalledProcessError):
                 pass
         # Fallback to simple HTTP fetch if no provider
         return []
@@ -110,7 +112,7 @@ class WebSearchProvider:
                 resp = client.get(url)
                 resp.raise_for_status()
                 return resp.text[:5000]  # Limit size
-        except Exception:
+        except Exception:  # network failure: return empty  # noqa: BLE001
             return ""
 
 
@@ -207,18 +209,17 @@ def parse_json_response(text: str) -> dict[str, Any]:
     s = text.strip()
     if s.startswith("```"):
         s = s.split("\n", 1)[1] if "\n" in s else s
-        if s.endswith("```"):
-            s = s[: -len("```")]
+        s = s.removesuffix("```")
         s = s.strip()
     try:
         obj = json.loads(s)
     except json.JSONDecodeError:
         start, end = s.find("{"), s.rfind("}")
         if start == -1 or end <= start:
-            raise
+            raise ValueError("no JSON object found")
         obj = json.loads(s[start : end + 1])
     if not isinstance(obj, dict):
-        raise ValueError("expected JSON object")
+        raise TypeError("expected JSON object")
     return obj
 
 

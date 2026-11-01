@@ -7,16 +7,16 @@ T = ThresholdsConfig(target_f1=0.85, failure_threshold=0.5, min_per_stratum=50)
 
 
 def _inputs(**kw):
-    base = dict(
-        overall=(0.87, 0.855, 0.90),  # ci_lower clears target → the "healthy" baseline
-        overall_n=200,
-        strata=[],
-        kappa=0.9,
-        kappa_required=False,
-        pending_reviews=0,
-        run_completed=True,
-        subjective_fields=[],
-    )
+    base = {
+        "overall": (0.87, 0.855, 0.90),  # ci_lower clears target → the "healthy" baseline
+        "overall_n": 200,
+        "strata": [],
+        "kappa": 0.9,
+        "kappa_required": False,
+        "pending_reviews": 0,
+        "run_completed": True,
+        "subjective_fields": [],
+    }
     base.update(kw)
     return GateInputs(**base)
 
@@ -53,7 +53,7 @@ def test_incomplete_run_is_error():
 def test_pending_review_blocks_not_errors():
     d = decide_gate(_inputs(pending_reviews=3), T)
     assert d.status == "blocked_pending_review"
-    assert not d.promote and not d.status == "error"
+    assert not d.promote and d.status != "error"
 
 
 def test_stratum_blocker_when_ci_upper_at_failure_threshold():

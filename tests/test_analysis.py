@@ -1,16 +1,13 @@
 """Tests for analysis module."""
 
 import json
-import os
 import tempfile
 from pathlib import Path
 
-import pytest
-
-from slm_eval.analysis.dataset import DatasetAnalyzer, DatasetAnalysis
-from slm_eval.analysis.error import ErrorAnalyzer, ErrorAnalysis
-from slm_eval.analysis.gate import GateAnalyzer, GateAnalysis
-from slm_eval.analysis.llm_analyzer import LLMAnalyzer, create_llm_analyzer
+from slm_eval.analysis.dataset import DatasetAnalyzer
+from slm_eval.analysis.error import ErrorAnalyzer
+from slm_eval.analysis.gate import GateAnalyzer
+from slm_eval.analysis.llm_analyzer import create_llm_analyzer
 
 
 def test_dataset_analysis_basic():

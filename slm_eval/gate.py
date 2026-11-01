@@ -98,7 +98,7 @@ def decide_gate(inputs: GateInputs, thresholds: ThresholdsConfig) -> GateDecisio
     warnings: list[str] = []
 
     # --- overall CI lower bound (AC-04: never the point estimate) ---
-    micro_f1, ci_lower, ci_upper = inputs.overall
+    micro_f1, ci_lower, _ci_upper = inputs.overall
     if ci_lower < thresholds.target_f1:
         blockers.append(
             f"ci_lower_below_target: {ci_lower:.3f} < {thresholds.target_f1} "

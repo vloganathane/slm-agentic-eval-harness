@@ -18,7 +18,6 @@ the format ``slm-eval calibrate apply`` and ``_load_calibration`` expect.
 from __future__ import annotations
 
 import copy
-import dataclasses
 import json
 import os
 import sys
@@ -32,9 +31,9 @@ CAL = ROOT / "calibration"
 PAIRS = CAL / "pairs.jsonl"
 DATA = ROOT / "data" / "cord" / "cases.jsonl"
 
-from slm_eval.config import EvalConfig  # noqa: E402  (sys.path setup above)
-from slm_eval.judge import CalibrationGate, CalibrationStatus, Judge  # noqa: E402
-from slm_eval.llm import OpenAICompatClient  # noqa: E402
+from slm_eval.config import EvalConfig
+from slm_eval.judge import CalibrationGate, CalibrationStatus, Judge
+from slm_eval.llm import OpenAICompatClient
 
 
 def _perturbations(gold_items: list[dict], i: int) -> list[tuple[str, list[dict], str]]:

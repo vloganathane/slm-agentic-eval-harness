@@ -8,13 +8,12 @@ before/during/after a run.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from slm_eval.analysis.dataset import DatasetAnalyzer, DatasetAnalysis
-from slm_eval.analysis.error import ErrorAnalyzer, ErrorAnalysis
-from slm_eval.analysis.gate import GateAnalyzer, GateAnalysis, load_gate_for_analyzer
+from slm_eval.analysis.dataset import DatasetAnalyzer
+from slm_eval.analysis.error import ErrorAnalyzer
+from slm_eval.analysis.gate import GateAnalyzer, load_gate_for_analyzer
 
 
 def dataset_analysis_tool(config_path: str, cases_path: str, minhash_threshold: float = 0.6) -> dict[str, Any]:
@@ -48,7 +47,7 @@ def dataset_analysis_tool(config_path: str, cases_path: str, minhash_threshold: 
                 "ocr_signal_distribution": analysis.ocr_signal_dist,
             },
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - tool wrapper: return structured error, not raise
         return {"exit_code": 1, "error": str(e), "summary": "", "data": {}}
 
 
@@ -89,11 +88,11 @@ def error_analysis_tool(run_id: str, score_path: str, config_path: str) -> dict[
                 "recommendations": analysis.recommendations,
             },
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - tool wrapper: return structured error, not raise
         return {"exit_code": 1, "error": str(e), "summary": "", "data": {}}
 
 
-def gate_analysis_tool(gate_path: str, config_path: str, score_path: Optional[str] = None) -> dict[str, Any]:
+def gate_analysis_tool(gate_path: str, config_path: str, score_path: str | None = None) -> dict[str, Any]:
     """Tool for agents: explain gate.json decision and provide root-cause analysis.
 
     Returns why gate blocked/passed, specific blockers, and remediation
@@ -129,7 +128,7 @@ def gate_analysis_tool(gate_path: str, config_path: str, score_path: Optional[st
                 "warnings": analysis.warnings,
             },
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - tool wrapper: return structured error, not raise
         return {"exit_code": 1, "error": str(e), "summary": "", "data": {}}
 
 
@@ -161,7 +160,7 @@ def load_gate_for_analyzer_tool(run_dir: str, config_path: str) -> dict[str, Any
                 "remediation": analysis.remediation,
             },
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - tool wrapper: return structured error, not raise
         return {"exit_code": 1, "error": str(e), "summary": "", "data": {}}
 
 

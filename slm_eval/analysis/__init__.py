@@ -11,15 +11,15 @@ All analyzers return structured JSON for agent consumption.
 
 from __future__ import annotations
 
-from .dataset import DatasetAnalyzer, DatasetAnalysis
-from .error import ErrorAnalyzer, ErrorAnalysis
-from .gate import GateAnalyzer, GateAnalysis
+from .dataset import DatasetAnalysis, DatasetAnalyzer
+from .error import ErrorAnalysis, ErrorAnalyzer
+from .gate import GateAnalysis, GateAnalyzer
 
 __all__ = [
-    "DatasetAnalyzer",
     "DatasetAnalysis",
-    "ErrorAnalyzer",
+    "DatasetAnalyzer",
     "ErrorAnalysis",
-    "GateAnalyzer",
+    "ErrorAnalyzer",
     "GateAnalysis",
+    "GateAnalyzer",
 ]

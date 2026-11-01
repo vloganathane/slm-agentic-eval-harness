@@ -136,5 +136,5 @@ def test_score_case_missing_judge_label_counts_incorrect():
     ],
 )
 def test_numeric_validator_tolerates_currency_formatting(pred, gold, expected_match):
-    tp, fp, fn = score_field(pred, gold, NumericValidator(tolerance=0.0))
+    tp, _fp, _fn = score_field(pred, gold, NumericValidator(tolerance=0.0))
     assert bool(tp) is expected_match

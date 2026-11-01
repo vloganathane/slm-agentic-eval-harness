@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class GateAnalysis:
@@ -22,16 +22,16 @@ class GateAnalysis:
         gate_path: str | Path,
         config_path: str | Path,
         passed: bool,
-        blockers: List[str],
-        warnings: List[str],
+        blockers: list[str],
+        warnings: list[str],
         micro_f1: float,
         ci_lower: float,
         ci_upper: float,
-        kappa: Optional[float],
+        kappa: float | None,
         n: int,
-        stratum_blockers: List[Dict[str, Any]],
-        root_cause: Optional[str],
-        remediation: List[Dict[str, Any]],
+        stratum_blockers: list[dict[str, Any]],
+        root_cause: str | None,
+        remediation: list[dict[str, Any]],
     ):
         self.run_id = run_id
         self.gate_path = str(gate_path)
@@ -62,17 +62,17 @@ class GateAnalyzer:
         self,
         gate_path: str | Path,
         config_path: str | Path,
-        score_path: Optional[str | Path] = None,
+        score_path: str | Path | None = None,
     ):
         self.gate_path = Path(gate_path)
         self.config_path = Path(config_path)
         self.score_path = Path(score_path) if score_path else None
 
-    def _load_gate(self) -> Dict[str, Any]:
+    def _load_gate(self) -> dict[str, Any]:
         with self.gate_path.open() as f:
             return json.load(f)
 
-    def _load_scores(self) -> List[Dict[str, Any]]:
+    def _load_scores(self) -> list[dict[str, Any]]:
         if not self.score_path or not self.score_path.exists():
             return []
         results = []
@@ -91,7 +91,7 @@ class GateAnalyzer:
         # Parse gate structure
         status = gate.get("status", "unknown")
         passed = status == "promote"
-        promote = gate.get("promote", False)
+        gate.get("promote", False)
         blockers = gate.get("blockers", [])
         warnings = gate.get("warnings", [])
         metrics = gate.get("metrics", {})
@@ -105,7 +105,7 @@ class GateAnalyzer:
 
         # Parse stratum-level decisions from gate.json
         stratum_decisions = gate.get("strata", [])
-        stratum_blockers: List[Dict[str, Any]] = []
+        stratum_blockers: list[dict[str, Any]] = []
 
         for stratum in stratum_decisions:
             s_status = stratum.get("status")
@@ -128,7 +128,7 @@ class GateAnalyzer:
                 stratum_blockers.append(blocker)
 
         # Root cause analysis
-        root_cause: Optional[str] = None
+        root_cause: str | None = None
         if not passed:
             # Identify primary blocker
             if ci_lower < 0.85:
@@ -151,7 +151,7 @@ class GateAnalyzer:
                 root_cause = "Unknown — inspect gate.json for details"
 
         # Remediation recommendations
-        remediation: List[Dict[str, Any]] = []
+        remediation: list[dict[str, Any]] = []
 
         if root_cause and "CI lower" in root_cause:
             remediation.append({
@@ -181,9 +181,9 @@ class GateAnalyzer:
         # Field-level drill-down
         if scores:
             # Aggregate by field
-            field_tp: Dict[str, int] = {}
-            field_fp: Dict[str, int] = {}
-            field_fn: Dict[str, int] = {}
+            field_tp: dict[str, int] = {}
+            field_fp: dict[str, int] = {}
+            field_fn: dict[str, int] = {}
             for s in scores:
                 field = s.get("field", "unknown")
                 tp = s.get("tp", 0)
@@ -194,9 +194,9 @@ class GateAnalyzer:
                 field_fn[field] = field_fn.get(field, 0) + fn
 
             field_f1 = {}
-            for f in field_tp:
-                total = field_tp[f] + field_fp[f] + field_fn[f]
-                field_f1[f] = field_tp[f] / total if total else 0.0
+            for f, tp in field_tp.items():
+                total = tp + field_fp.get(f, 0) + field_fn.get(f, 0)
+                field_f1[f] = tp / total if total else 0.0
 
             sorted_fields = sorted(field_f1.items(), key=lambda x: x[1])
 
@@ -256,7 +256,7 @@ class GateAnalyzer:
         if a.root_cause:
             lines.append(f"  Root cause: {a.root_cause}")
         if a.stratum_blockers:
-            lines.append(f"  Stratum blockers:")
+            lines.append("  Stratum blockers:")
             for sb in a.stratum_blockers:
                 lines.append(
                     f"    • '{sb['stratum']}': ci_upper={sb['ci_upper']:.4f}, n={sb['n']}, gap={sb['gap_to_target']:.4f} to target"
