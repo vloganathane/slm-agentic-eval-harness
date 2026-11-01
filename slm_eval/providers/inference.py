@@ -267,6 +267,43 @@ class LocalProvider(InferenceProvider):
             return False
 
 
+class OllamaProvider(InferenceProvider):
+    """Ollama inference (local, easy setup)."""
+
+    def __init__(self, config: ProviderConfig):
+        self.config = config
+        self.client = None
+
+    def _init_client(self):
+        from openai import OpenAI
+        # Ollama uses port 11434 by default
+        api_base = self.config.api_base or "http://localhost:11434/v1"
+        self.client = OpenAI(api_key="ollama", base_url=api_base)
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        if self.client is None:
+            self._init_client()
+        response = self.client.chat.completions.create(
+            model=self.config.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=kwargs.get("temperature", self.config.temperature),
+            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+        )
+        return response.choices[0].message.content
+
+    def is_available(self) -> bool:
+        import shutil
+        if not shutil.which("ollama"):
+            return False
+        # Check if Ollama is running
+        import urllib.request
+        try:
+            urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+            return True
+        except Exception:
+            return False
+
+
 # Provider registry
 PROVIDERS: dict[str, type[InferenceProvider]] = {
     "openai": OpenAIProvider,
@@ -277,6 +314,7 @@ PROVIDERS: dict[str, type[InferenceProvider]] = {
     "together": TogetherProvider,
     "groq": GroqProvider,
     "fireworks": FireworksProvider,
+    "ollama": OllamaProvider,
     "local": LocalProvider,
     "llama_server": LocalProvider,
     "vllm": LocalProvider,

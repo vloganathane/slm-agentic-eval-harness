@@ -801,18 +801,19 @@ slm-eval train -c config.yaml --framework llama_factory
 
 ### Serving Frameworks
 
-| Framework | Throughput | Latency | Install |
-|-----------|-----------|---------|---------|
-| **vLLM** | **High** | Low | `pip install vllm` |
-| **TGI** | High | Low | `pip install text-generation` |
-| **SGLang** | **Highest** | **Lowest** | `pip install sglang` |
-| **llama.cpp** | Medium | Medium | `brew install llama.cpp` |
+| Framework | Throughput | Latency | Ease of Use | Install |
+|-----------|-----------|---------|-------------|---------|
+| **vLLM** | **High** | Low | Medium | `pip install vllm` |
+| **TGI** | High | Low | Medium | `pip install text-generation` |
+| **SGLang** | **Highest** | **Lowest** | Medium | `pip install sglang` |
+| **llama.cpp** | Medium | Medium | Medium | `brew install llama.cpp` |
+| **Ollama** | Medium | Medium | **Easiest** | `brew install ollama` |
 
 #### Choose Serving Framework
 
 ```yaml
 serving:
-  framework: vllm  # or tgi, sglang, llama_cpp
+  framework: vllm  # or tgi, sglang, llama_cpp, ollama
   model: meta-llama/Llama-3-8B-Instruct
   port: 8000
   gpu_memory_utilization: 0.9
@@ -834,6 +835,9 @@ slm-eval serve -c config.yaml --framework sglang
 
 # llama.cpp (local)
 slm-eval serve -c config.yaml --framework llama_cpp
+
+# Ollama (easiest setup)
+slm-eval serve -c config.yaml --framework ollama
 ```
 
 #### Auto-Serve with Framework Selection
@@ -841,6 +845,24 @@ slm-eval serve -c config.yaml --framework llama_cpp
 ```bash
 slm-eval run -c config.yaml --model meta-llama/Llama-3-8B --auto-serve --serving-framework sglang
 ```
+
+#### Ollama Quickstart
+
+Ollama is the easiest way to run local models:
+
+```bash
+# Install Ollama
+brew install ollama  # macOS
+# or download from https://ollama.ai
+
+# Pull a model
+ollama pull llama3:8b
+
+# Run evaluation with Ollama
+slm-eval run -c config.yaml --model llama3:8b --serving-framework ollama
+```
+
+Ollama supports many models: `llama3`, `mistral`, `gemma`, `phi3`, `qwen`, etc.
 
 ### Provider Compatibility Matrix
 

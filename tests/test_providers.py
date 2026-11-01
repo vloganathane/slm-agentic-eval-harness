@@ -69,6 +69,11 @@ class TestInferenceProviders:
         provider = get_provider("local", config)
         assert provider is not None
 
+    def test_get_provider_ollama(self):
+        config = ProviderConfig(provider="ollama", model="llama3:8b")
+        provider = get_provider("ollama", config)
+        assert provider is not None
+
     def test_get_provider_unknown(self):
         config = ProviderConfig(provider="unknown", model="model")
         with pytest.raises(ValueError, match="Unknown provider"):
@@ -131,6 +136,7 @@ class TestServingProviders:
         assert "tgi" in providers
         assert "sglang" in providers
         assert "llama_cpp" in providers
+        assert "ollama" in providers
 
     def test_get_serving_provider_vllm(self):
         provider = get_serving_provider("vllm")
@@ -154,6 +160,10 @@ class TestServingProviders:
 
     def test_get_serving_provider_llama_cpp_dot(self):
         provider = get_serving_provider("llama.cpp")
+        assert provider is not None
+
+    def test_get_serving_provider_ollama(self):
+        provider = get_serving_provider("ollama")
         assert provider is not None
 
     def test_get_serving_provider_unknown(self):

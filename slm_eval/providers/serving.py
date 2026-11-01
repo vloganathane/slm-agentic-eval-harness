@@ -1,4 +1,4 @@
-"""Serving frameworks: vLLM, TGI, SGLang, llama.cpp."""
+"""Serving frameworks: vLLM, TGI, SGLang, llama.cpp, Ollama."""
 
 from __future__ import annotations
 
@@ -8,6 +8,64 @@ import urllib.request
 from typing import Any
 
 from .base import ServingConfig, ServingProvider
+
+
+class OllamaServingProvider(ServingProvider):
+    """Ollama serving framework (local, easy setup)."""
+
+    def serve(self, config: ServingConfig) -> str:
+        """Pull and serve model via Ollama.
+
+        Ollama runs as a daemon, so we just pull the model and ensure it's ready.
+        """
+        # Pull model
+        print(f"Pulling Ollama model: {config.model}")
+        try:
+            subprocess.run(["ollama", "pull", config.model], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: ollama pull failed: {e.stderr.decode() if e.stderr else e}")
+
+        # Ensure Ollama daemon is running
+        self._ensure_ollama_running()
+
+        # Wait for server
+        port = config.port if config.port != 8000 else 11434  # Ollama default port
+        self._wait_for_server(port)
+
+        return f"http://localhost:{port}/v1"
+
+    def _ensure_ollama_running(self):
+        """Start Ollama daemon if not running."""
+        import shutil
+        if not shutil.which("ollama"):
+            raise RuntimeError("Ollama not installed. Install from: https://ollama.ai")
+
+        # Check if already running
+        try:
+            urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+            return
+        except Exception:
+            pass
+
+        # Start Ollama daemon
+        print("Starting Ollama daemon...")
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+
+    def _wait_for_server(self, port: int, timeout: int = 60):
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                urllib.request.urlopen(f"http://localhost:{port}/api/tags", timeout=2)
+                print("Ollama server ready")
+                return
+            except Exception:
+                time.sleep(1)
+        raise TimeoutError(f"Ollama server did not start within {timeout}s")
+
+    def is_available(self) -> bool:
+        import shutil
+        return shutil.which("ollama") is not None
 
 
 class VLLMServingProvider(ServingProvider):
@@ -176,6 +234,7 @@ SERVING_PROVIDERS: dict[str, type[ServingProvider]] = {
     "llama_cpp": LlamaCppServingProvider,
     "llama-cpp": LlamaCppServingProvider,
     "llama.cpp": LlamaCppServingProvider,
+    "ollama": OllamaServingProvider,
 }
 
 
