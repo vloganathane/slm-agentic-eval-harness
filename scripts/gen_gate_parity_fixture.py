@@ -1,12 +1,10 @@
-"""Generate the shared Python↔Rust gate parity fixture.
+"""Generate the shared Python gate parity fixture.
 
 Run from the repo root::
 
     python scripts/gen_gate_parity_fixture.py
 
-Both ``tests/test_gate_parity.py`` and the Rust unit test in
-``slm-eval-infinity/src/eval/gate.rs`` read the generated file, so a change to
-either implementation without updating the other fails the suite.
+The fixture is read by ``tests/test_gate_parity.py`` to assert Python behavior.
 """
 
 from __future__ import annotations

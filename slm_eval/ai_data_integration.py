@@ -1,7 +1,7 @@
 """AI Data Science Team integration for SLM evaluation harness.
 
 Provides post-evaluation analysis, visualization, and integration with
-the Rust-based evaluation pipeline (slm-eval-infinity).
+the Python evaluation pipeline.
 
 Usage:
     python -m slm_eval.ai_data_integration gate cord-baseline
