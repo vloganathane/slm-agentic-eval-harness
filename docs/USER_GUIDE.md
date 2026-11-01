@@ -14,6 +14,7 @@ Complete guide to using slm-eval for evaluating and fine-tuning small language m
 - [LoRA Fine-Tuning](#lora-fine-tuning)
 - [Model Serving](#model-serving)
 - [Modal GPU Backend](#modal-gpu-backend)
+- [Multi-Provider Support](#multi-provider-support)
 - [CLI Reference](#cli-reference)
 - [Exit Codes](#exit-codes)
 - [Troubleshooting](#troubleshooting)
@@ -660,6 +661,223 @@ Note: Modal Starter plan requires payment method for GPU access. CPU-only works 
 
 ---
 
+## Multi-Provider Support
+
+slm-eval supports multiple inference providers, training frameworks, and serving backends.
+
+### List Providers
+
+```bash
+# List all providers
+slm-eval providers list
+
+# List by type
+slm-eval providers list --type inference
+slm-eval providers list --type training
+slm-eval providers list --type serving
+
+# Check availability
+slm-eval providers check
+slm-eval providers check --type inference
+```
+
+### Inference Providers
+
+| Provider | Models | Install |
+|----------|--------|---------|
+| **OpenAI** | GPT-4, GPT-4o, GPT-3.5 | `pip install openai` |
+| **Anthropic** | Claude 3 Opus, Sonnet, Haiku | `pip install anthropic` |
+| **Google** | Gemini Pro, Gemini Ultra | `pip install google-generativeai` |
+| **Mistral** | Mistral Large, Medium, Small | `pip install mistralai` |
+| **Together** | Llama 3, Mixtral, etc. | `pip install openai` |
+| **Groq** | Llama 3, Mixtral (fast) | `pip install groq` |
+| **Fireworks** | Llama 3, Qwen, etc. | `pip install openai` |
+| **Local** | Any llama.cpp/vLLM model | Built-in |
+
+#### Configure Inference Provider
+
+```yaml
+# eval_config.yaml
+inference:
+  provider: anthropic
+  model: claude-3-opus-20240229
+  api_key: ${ANTHROPIC_API_KEY}
+  temperature: 0.0
+  max_tokens: 1024
+```
+
+#### Environment Variables
+
+```bash
+# OpenAI
+export OPENAI_API_KEY=sk-...
+
+# Anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Google Gemini
+export GOOGLE_API_KEY=...
+
+# Mistral
+export MISTRAL_API_KEY=...
+
+# Together
+export TOGETHER_API_KEY=...
+
+# Groq
+export GROQ_API_KEY=...
+
+# Fireworks
+export FIREWORKS_API_KEY=...
+```
+
+#### Example: Using Claude for Judge
+
+```yaml
+judge:
+  enabled: true
+  provider: anthropic
+  model: claude-3-opus-20240229
+  min_kappa: 0.85
+```
+
+#### Example: Using Groq for Fast Inference
+
+```yaml
+inference:
+  provider: groq
+  model: llama3-70b-8192
+  temperature: 0.0
+```
+
+### Training Frameworks
+
+| Framework | Speed | GPU Memory | Install |
+|-----------|-------|-----------|---------|
+| **TRL** | Fast | Medium | `pip install -e .[train]` |
+| **Axolotl** | Fast | Medium | `pip install axolotl` |
+| **LLaMA-Factory** | Fast | Medium | `pip install llamafactory` |
+| **Unsloth** | **Fastest** | Low | `pip install unsloth` |
+
+#### Choose Training Framework
+
+```yaml
+training:
+  framework: trl  # or axolotl, llama_factory, unsloth
+  base_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  dataset: data/train.jsonl
+  output_dir: checkpoints/lora-v1
+  epochs: 3
+  batch_size: 4
+  learning_rate: 2e-4
+  lora_r: 16
+  lora_alpha: 32
+```
+
+#### CLI: Choose Training Framework
+
+```bash
+# TRL (default)
+slm-eval train -c config.yaml --framework trl
+
+# Unsloth (fastest, requires CUDA)
+slm-eval train -c config.yaml --framework unsloth
+
+# Axolotl
+slm-eval train -c config.yaml --framework axolotl
+
+# LLaMA-Factory
+slm-eval train -c config.yaml --framework llama_factory
+```
+
+#### Performance Comparison
+
+| Framework | Model | Samples | Time/Epoch | VRAM |
+|-----------|-------|---------|-----------|------|
+| TRL | TinyLlama-1.1B | 1000 | ~10 min | 4GB |
+| Unsloth | TinyLlama-1.1B | 1000 | ~3 min | 2GB |
+| Axolotl | TinyLlama-1.1B | 1000 | ~10 min | 4GB |
+| LLaMA-Factory | TinyLlama-1.1B | 1000 | ~10 min | 4GB |
+
+### Serving Frameworks
+
+| Framework | Throughput | Latency | Install |
+|-----------|-----------|---------|---------|
+| **vLLM** | **High** | Low | `pip install vllm` |
+| **TGI** | High | Low | `pip install text-generation` |
+| **SGLang** | **Highest** | **Lowest** | `pip install sglang` |
+| **llama.cpp** | Medium | Medium | `brew install llama.cpp` |
+
+#### Choose Serving Framework
+
+```yaml
+serving:
+  framework: vllm  # or tgi, sglang, llama_cpp
+  model: meta-llama/Llama-3-8B-Instruct
+  port: 8000
+  gpu_memory_utilization: 0.9
+  max_model_len: 8192
+  tensor_parallel_size: 1
+```
+
+#### CLI: Choose Serving Framework
+
+```bash
+# vLLM (default)
+slm-eval serve -c config.yaml --framework vllm
+
+# TGI
+slm-eval serve -c config.yaml --framework tgi
+
+# SGLang
+slm-eval serve -c config.yaml --framework sglang
+
+# llama.cpp (local)
+slm-eval serve -c config.yaml --framework llama_cpp
+```
+
+#### Auto-Serve with Framework Selection
+
+```bash
+slm-eval run -c config.yaml --model meta-llama/Llama-3-8B --auto-serve --serving-framework sglang
+```
+
+### Provider Compatibility Matrix
+
+| Feature | OpenAI | Anthropic | Google | Mistral | Together | Groq | Fireworks | Local |
+|---------|--------|-----------|--------|---------|----------|------|-----------|-------|
+| Text Gen | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Chat | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Streaming | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| JSON Mode | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| Function Call | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Vision | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ |
+
+### Custom Provider
+
+To add a custom provider:
+
+```python
+from slm_eval.providers.base import InferenceProvider, ProviderConfig
+
+class MyProvider(InferenceProvider):
+    def __init__(self, config: ProviderConfig):
+        self.config = config
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        # Your implementation
+        pass
+
+    def is_available(self) -> bool:
+        return True
+
+# Register
+from slm_eval.providers.inference import PROVIDERS
+PROVIDERS["my_provider"] = MyProvider
+```
+
+---
+
 ## CLI Reference
 
 ### Core Commands
@@ -681,17 +899,26 @@ Note: Modal Starter plan requires payment method for GPU access. CPU-only works 
 
 | Command | Description |
 |---------|-------------|
-| `slm-eval train -c <config>` | LoRA fine-tune (PEFT/TRL) |
-| `slm-eval serve -c <config>` | Launch vLLM server |
-| `slm-eval run -c <config> --auto-serve` | Run with auto vLLM management |
+| `slm-eval train -c <config>` | LoRA fine-tune (TRL/Axolotl/LLaMA-Factory/Unsloth) |
+| `slm-eval serve -c <config>` | Launch serving server (vLLM/TGI/SGLang/llama.cpp) |
+| `slm-eval run -c <config> --auto-serve` | Run with auto-serving |
 
 ### Modal Commands
 
 | Command | Description |
 |---------|-------------|
 | `slm-eval modal generate-template` | Generate Modal app template |
-| `slm-eval modal train` | Train on Modal GPU |
+| `slm-eval modal train` | Train on Modal GPU/CPU |
 | `slm-eval modal deploy` | Deploy vLLM on Modal |
+
+### Provider Commands
+
+| Command | Description |
+|---------|-------------|
+| `slm-eval providers list` | List all available providers |
+| `slm-eval providers list --type inference` | List inference providers only |
+| `slm-eval providers check` | Check which providers are installed |
+| `slm-eval providers check --type training` | Check training frameworks only |
 
 ### Analysis Commands
 

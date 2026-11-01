@@ -76,7 +76,28 @@ modal = ["modal"]
 serve = ["vllm"]
 ocr = ["pytesseract", "Pillow"]
 viz = ["matplotlib", "seaborn"]
-all = ["train", "modal", "serve", "ocr", "viz"]
+
+# Multi-provider inference
+anthropic = ["anthropic"]
+google = ["google-generativeai"]
+mistral = ["mistralai"]
+together = ["together"]  # uses openai
+groq = ["groq"]  # uses openai
+fireworks = ["fireworks"]  # uses openai
+
+# Multi-provider training
+axolotl = ["axolotl"]
+llama-factory = ["llamafactory"]
+unsloth = ["unsloth"]
+
+# Multi-provider serving
+tgi = ["text-generation"]
+sglang = ["sglang"]
+
+# All providers
+providers = ["anthropic", "google-generativeai", "mistralai", "together", "groq"]
+
+all = ["train", "modal", "serve", "ocr", "viz", "providers"]
 
 [dependency-groups]
 dev = ["pytest", "ruff", "pytest-cov"]

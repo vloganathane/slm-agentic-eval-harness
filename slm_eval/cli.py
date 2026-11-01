@@ -706,7 +706,111 @@ def build_parser() -> argparse.ArgumentParser:
     # Modal GPU backend (Appendix A trigger: local inference too slow)
     add_modal_subparsers(sub)
 
+    # Multi-provider support
+    providers_parser = sub.add_parser("providers", help="List available providers/frameworks")
+    providers_sub = providers_parser.add_subparsers(dest="providers_command", required=True)
+
+    providers_list_parser = providers_sub.add_parser("list", help="List all providers")
+    providers_list_parser.add_argument("--type", choices=["inference", "training", "serving", "all"], default="all", help="Provider type to list")
+    providers_list_parser.set_defaults(func=_cmd_providers_list)
+
+    providers_check_parser = providers_sub.add_parser("check", help="Check which providers are available")
+    providers_check_parser.add_argument("--type", choices=["inference", "training", "serving", "all"], default="all", help="Provider type to check")
+    providers_check_parser.set_defaults(func=_cmd_providers_check)
+
     return p
+
+
+def _cmd_providers_list(args: argparse.Namespace) -> int:
+    """List available providers/frameworks."""
+    from slm_eval.providers import (
+        list_providers,
+        list_serving_providers,
+        list_training_providers,
+    )
+
+    if args.type in ("inference", "all"):
+        print("\n📦 Inference Providers:")
+        print("-" * 40)
+        for p in sorted(list_providers()):
+            print(f"  • {p}")
+
+    if args.type in ("training", "all"):
+        print("\n🏋️ Training Frameworks:")
+        print("-" * 40)
+        for p in sorted(list_training_providers()):
+            print(f"  • {p}")
+
+    if args.type in ("serving", "all"):
+        print("\n🚀 Serving Frameworks:")
+        print("-" * 40)
+        for p in sorted(list_serving_providers()):
+            print(f"  • {p}")
+
+    return EXIT_PROMOTE
+
+
+def _cmd_providers_check(args: argparse.Namespace) -> int:
+    """Check which providers are available."""
+    from slm_eval.providers import (
+        get_provider,
+        get_serving_provider,
+        get_training_provider,
+        list_providers,
+        list_serving_providers,
+        list_training_providers,
+    )
+
+    results: dict[str, list[tuple[str, bool, str]]] = {
+        "inference": [],
+        "training": [],
+        "serving": [],
+    }
+
+    if args.type in ("inference", "all"):
+        for name in sorted(list_providers()):
+            try:
+                provider = get_provider(name, config=None)  # type: ignore
+                available = provider.is_available()
+                results["inference"].append((name, available, ""))
+            except Exception as e:
+                results["inference"].append((name, False, str(e)[:50]))
+
+    if args.type in ("training", "all"):
+        for name in sorted(list_training_providers()):
+            try:
+                provider = get_training_provider(name)
+                available = provider.is_available()
+                results["training"].append((name, available, ""))
+            except Exception as e:
+                results["training"].append((name, False, str(e)[:50]))
+
+    if args.type in ("serving", "all"):
+        for name in sorted(list_serving_providers()):
+            try:
+                provider = get_serving_provider(name)
+                available = provider.is_available()
+                results["serving"].append((name, available, ""))
+            except Exception as e:
+                results["serving"].append((name, False, str(e)[:50]))
+
+    # Print results
+    for provider_type, items in results.items():
+        if not items:
+            continue
+        print(f"\n{provider_type.upper()} PROVIDERS:")
+        print("-" * 60)
+        for name, available, error in items:
+            status = "✅" if available else "❌"
+            error_msg = f" ({error})" if error else ""
+            print(f"  {status} {name}{error_msg}")
+
+    # Summary
+    total = sum(len(v) for v in results.values())
+    available = sum(1 for v in results.values() for _, a, _ in v if a)
+    print(f"\nSummary: {available}/{total} providers available")
+
+    return EXIT_PROMOTE if available > 0 else EXIT_BLOCKED
 
 
 def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
