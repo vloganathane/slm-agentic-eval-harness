@@ -346,18 +346,28 @@ TRAINING_PROVIDERS: dict[str, type[TrainingProvider]] = {
     "llama_factory": LLaMAFactoryProvider,
     "llama-factory": LLaMAFactoryProvider,
     "unsloth": UnslothProvider,
+    "nanollama": None,  # Special handling - requires repo path
 }
 
 
-def get_training_provider(name: str) -> TrainingProvider:
-    """Get training provider by name."""
+def get_training_provider(name: str, **kwargs) -> TrainingProvider:
+    """Get training provider by name.
+
+    Args:
+        name: Provider name (trl, axolotl, llama_factory, unsloth, nanollama)
+        **kwargs: Additional arguments for provider (e.g., repo_path for nanollama)
+    """
+    if name.lower() == "nanollama":
+        from .nanollama import NanollamaTrainingProvider
+        return NanollamaTrainingProvider(**kwargs)
+
     provider_cls = TRAINING_PROVIDERS.get(name.lower())
     if provider_cls is None:
-        available = ", ".join(TRAINING_PROVIDERS.keys())
+        available = ", ".join(k for k, v in TRAINING_PROVIDERS.items() if v is not None)
         raise ValueError(f"Unknown training framework: {name}. Available: {available}")
-    return provider_cls()
+    return provider_cls(**kwargs)
 
 
 def list_training_providers() -> list[str]:
     """List available training frameworks."""
-    return list(TRAINING_PROVIDERS.keys())
+    return ["trl", "axolotl", "llama_factory", "llama-factory", "unsloth", "nanollama"]

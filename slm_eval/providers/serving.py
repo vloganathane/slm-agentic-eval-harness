@@ -235,18 +235,38 @@ SERVING_PROVIDERS: dict[str, type[ServingProvider]] = {
     "llama-cpp": LlamaCppServingProvider,
     "llama.cpp": LlamaCppServingProvider,
     "ollama": OllamaServingProvider,
+    "nanollama_go": None,  # Special handling
+    "nanollama": None,  # Special handling
 }
 
 
-def get_serving_provider(name: str) -> ServingProvider:
-    """Get serving provider by name."""
+def get_serving_provider(name: str, **kwargs) -> ServingProvider:
+    """Get serving provider by name.
+
+    Args:
+        name: Provider name (vllm, tgi, sglang, llama_cpp, ollama, nanollama)
+        **kwargs: Additional arguments for provider
+    """
+    if name.lower() == "nanollama":
+        from .nanollama import NanollamaGoServingProvider
+        return NanollamaGoServingProvider(**kwargs)
+    elif name.lower() == "nanollama_go":
+        from .nanollama import NanollamaGoServingProvider
+        return NanollamaGoServingProvider(**kwargs)
+    elif name.lower() == "nanollama_llamacpp":
+        from .nanollama import NanollamaLlamaCppServingProvider
+        return NanollamaLlamaCppServingProvider(**kwargs)
+    elif name.lower() == "nanollama_ollama":
+        from .nanollama import NanollamaOllamaServingProvider
+        return NanollamaOllamaServingProvider(**kwargs)
+
     provider_cls = SERVING_PROVIDERS.get(name.lower())
     if provider_cls is None:
-        available = ", ".join(SERVING_PROVIDERS.keys())
+        available = ", ".join(k for k, v in SERVING_PROVIDERS.items() if v is not None)
         raise ValueError(f"Unknown serving framework: {name}. Available: {available}")
-    return provider_cls()
+    return provider_cls(**kwargs)
 
 
 def list_serving_providers() -> list[str]:
     """List available serving frameworks."""
-    return list(SERVING_PROVIDERS.keys())
+    return ["vllm", "tgi", "sglang", "llama_cpp", "llama-cpp", "llama.cpp", "ollama", "nanollama", "nanollama_go", "nanollama_llamacpp", "nanollama_ollama"]

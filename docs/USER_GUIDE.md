@@ -864,6 +864,139 @@ slm-eval run -c config.yaml --model llama3:8b --serving-framework ollama
 
 Ollama supports many models: `llama3`, `mistral`, `gemma`, `phi3`, `qwen`, etc.
 
+### Nanollama (Train from Scratch)
+
+[Nanollama](https://github.com/ariannamethod/nanollama) trains Llama 3 models from scratch with personality support.
+
+#### Setup
+
+```bash
+# Clone nanollama
+git clone https://github.com/ariannamethod/nanollama.git
+cd nanollama
+pip install .
+
+# Build Go inference engine (optional)
+cd go && go build -o nanollama . && cd ..
+```
+
+#### Model Tiers
+
+| Name | Layers | Dim | Params | Languages |
+|------|--------|-----|--------|-----------|
+| nano | 13 | 576 | 89M | EN |
+| micro | 16 | 640 | 122M | EN |
+| mini | 20 | 768 | 173M | EN |
+| small | 24 | 1024 | 336M | EN |
+| goldie | 28 | 1536 | 841M | EN, RU, FR, DE |
+| medium | 32 | 2048 | 1.7B | + ES, PT, UK, TR |
+| large | 36 | 3072 | 4.2B | + AR, HI, ZH, JA, KO |
+| big | 40 | 4096 | 7.9B | 13 languages |
+
+#### Train from Scratch
+
+```bash
+# Prepare data (FineWeb-Edu)
+python -m data.prepare_fineweb --num-samples 10000000
+
+# Train nano model
+slm-eval train \
+  -c config.yaml \
+  --framework nanollama \
+  --model-size nano \
+  --mode pretrain \
+  --output-dir checkpoints/nano
+```
+
+#### LoRA Personality Fine-Tuning
+
+```bash
+# Train personality (e.g., "Leo")
+slm-eval train \
+  -c config.yaml \
+  --framework nanollama \
+  --base-checkpoint checkpoints/nano/checkpoint.pt \
+  --data personality_data.txt \
+  --voice leo \
+  --rank 64 \
+  --alpha 64 \
+  --epochs 20 \
+  --output-dir personalities/leo
+```
+
+**Output:**
+- `adapter.pt` — LoRA weights (~35MB)
+- `merged.pt` — Full model with personality
+- `gamma-leo.npz` — Personality delta (portable)
+- `nano-leo.gguf` — GGUF for llama.cpp
+
+#### Personality Data Format
+
+Use plain text (not JSONL):
+
+```
+Human: What is the meaning of life?
+AI: The meaning of life is to find your gift. The purpose of life is to give it away.
+
+Human: Tell me about yourself.
+AI: I'm Leo, a philosopher who sees beauty in simplicity...
+```
+
+#### Serve with Personality
+
+```bash
+# Go engine (standalone, zero dependencies)
+./nanollama/go/nanollama --model nano.gguf --gamma gamma-leo.npz --serve --port 8080
+
+# llama.cpp (GGUF compatible)
+llama-server -m nano-leo.gguf --port 8080
+
+# Ollama
+ollama create leo -f Modelfile  # FROM nano-leo.gguf
+ollama run leo
+```
+
+#### Run Evaluation with Nanollama
+
+```bash
+# Using Go engine
+slm-eval run -c config.yaml \
+  --model nano-leo.gguf \
+  --serving-framework nanollama_go \
+  --gamma gamma-leo.npz
+
+# Using llama.cpp
+slm-eval run -c config.yaml \
+  --model nano-leo.gguf \
+  --serving-framework nanollama_llamacpp
+
+# Using Ollama
+slm-eval run -c config.yaml \
+  --model leo \
+  --serving-framework nanollama_ollama
+```
+
+#### Gamma (Personality Weights)
+
+Gamma is the difference between personality and base model. It's portable:
+
+```
+γ = θ_personality − θ_base
+```
+
+Apply same gamma to different base models for personality transfer:
+
+```bash
+# Extract gamma
+python -m scripts.extract_gamma \
+  --personality_ckpt personalities/leo/merged.pt \
+  --base_ckpt checkpoints/nano/checkpoint.pt \
+  --output gamma-leo.npz
+
+# Apply to different base
+./nanollama --model different-base.gguf --gamma gamma-leo.npz
+```
+
 ### Provider Compatibility Matrix
 
 | Feature | OpenAI | Anthropic | Google | Mistral | Together | Groq | Fireworks | Local |

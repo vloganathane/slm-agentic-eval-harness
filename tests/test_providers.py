@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from slm_eval.providers import (
@@ -122,6 +124,10 @@ class TestTrainingProviders:
         provider = get_training_provider("unsloth")
         assert provider is not None
 
+    def test_get_training_provider_nanollama(self):
+        provider = get_training_provider("nanollama", repo_path="/tmp/nonexistent")
+        assert provider is not None
+
     def test_get_training_provider_unknown(self):
         with pytest.raises(ValueError, match="Unknown training framework"):
             get_training_provider("unknown")
@@ -164,6 +170,22 @@ class TestServingProviders:
 
     def test_get_serving_provider_ollama(self):
         provider = get_serving_provider("ollama")
+        assert provider is not None
+
+    def test_get_serving_provider_nanollama(self):
+        provider = get_serving_provider("nanollama", go_binary="/tmp/nonexistent")
+        assert provider is not None
+
+    def test_get_serving_provider_nanollama_go(self):
+        provider = get_serving_provider("nanollama_go", go_binary="/tmp/nonexistent")
+        assert provider is not None
+
+    def test_get_serving_provider_nanollama_llamacpp(self):
+        provider = get_serving_provider("nanollama_llamacpp")
+        assert provider is not None
+
+    def test_get_serving_provider_nanollama_ollama(self):
+        provider = get_serving_provider("nanollama_ollama")
         assert provider is not None
 
     def test_get_serving_provider_unknown(self):
@@ -226,3 +248,42 @@ class TestProviderConfigs:
         assert config.gpu_memory_utilization == 0.9
         assert config.max_model_len == 8192
         assert config.tensor_parallel_size == 1
+
+
+class TestNanollama:
+    """Tests for nanollama provider."""
+
+    def test_model_tiers(self):
+        from slm_eval.providers.nanollama import MODEL_TIERS
+
+        assert "nano" in MODEL_TIERS
+        assert "micro" in MODEL_TIERS
+        assert "mini" in MODEL_TIERS
+        assert "small" in MODEL_TIERS
+        assert "goldie" in MODEL_TIERS
+        assert "medium" in MODEL_TIERS
+        assert "large" in MODEL_TIERS
+        assert "big" in MODEL_TIERS
+
+    def test_nano_tier_info(self):
+        from slm_eval.providers.nanollama import MODEL_TIERS
+
+        nano = MODEL_TIERS["nano"]
+        assert nano["layers"] == 13
+        assert nano["dim"] == 576
+        assert nano["heads"] == 9
+        assert nano["params"] == "89M"
+
+    def test_training_provider_init(self):
+        from slm_eval.providers.nanollama import NanollamaTrainingProvider
+
+        provider = NanollamaTrainingProvider(repo_path="/tmp/nonexistent")
+        assert provider.repo_path == Path("/tmp/nonexistent")
+        assert provider.is_available() is False
+
+    def test_go_serving_provider_init(self):
+        from slm_eval.providers.nanollama import NanollamaGoServingProvider
+
+        provider = NanollamaGoServingProvider(go_binary="/tmp/nonexistent")
+        assert provider.go_binary == Path("/tmp/nonexistent")
+        assert provider.is_available() is False

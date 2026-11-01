@@ -718,6 +718,36 @@ def build_parser() -> argparse.ArgumentParser:
     providers_check_parser.add_argument("--type", choices=["inference", "training", "serving", "all"], default="all", help="Provider type to check")
     providers_check_parser.set_defaults(func=_cmd_providers_check)
 
+    # Nanollama commands
+    nanollama_parser = sub.add_parser("nanollama", help="Nanollama commands (train from scratch + personality)")
+    nanollama_sub = nanollama_parser.add_subparsers(dest="nanollama_command", required=True)
+
+    nanollama_train_parser = nanollama_sub.add_parser("train", help="Train nanollama model")
+    nanollama_train_parser.add_argument("--model-size", default="nano", choices=["nano", "micro", "mini", "small", "goldie", "medium", "large", "big"], help="Model tier")
+    nanollama_train_parser.add_argument("--mode", default="lora_personality", choices=["pretrain", "lora_personality"], help="Training mode")
+    nanollama_train_parser.add_argument("--base-checkpoint", help="Base checkpoint for LoRA personality")
+    nanollama_train_parser.add_argument("--data", required=True, help="Training data file")
+    nanollama_train_parser.add_argument("--voice", default="default", help="Personality voice name")
+    nanollama_train_parser.add_argument("--rank", type=int, default=64, help="LoRA rank")
+    nanollama_train_parser.add_argument("--alpha", type=int, default=64, help="LoRA alpha")
+    nanollama_train_parser.add_argument("--epochs", type=int, default=20, help="Training epochs")
+    nanollama_train_parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    nanollama_train_parser.add_argument("--output-dir", required=True, help="Output directory")
+    nanollama_train_parser.add_argument("--repo-path", help="Path to nanollama repo")
+    nanollama_train_parser.set_defaults(func=_cmd_nanollama_train)
+
+    nanollama_serve_parser = nanollama_sub.add_parser("serve", help="Serve nanollama model")
+    nanollama_serve_parser.add_argument("--model", required=True, help="Model path (GGUF)")
+    nanollama_serve_parser.add_argument("--gamma", help="Gamma file (personality weights)")
+    nanollama_serve_parser.add_argument("--engine", default="go", choices=["go", "llamacpp", "ollama"], help="Inference engine")
+    nanollama_serve_parser.add_argument("--port", type=int, default=8080, help="Server port")
+    nanollama_serve_parser.add_argument("--go-binary", help="Path to Go binary")
+    nanollama_serve_parser.set_defaults(func=_cmd_nanollama_serve)
+
+    nanollama_info_parser = nanollama_sub.add_parser("info", help="Show nanollama model tier info")
+    nanollama_info_parser.add_argument("--model-size", help="Show info for specific tier")
+    nanollama_info_parser.set_defaults(func=_cmd_nanollama_info)
+
     return p
 
 
@@ -811,6 +841,110 @@ def _cmd_providers_check(args: argparse.Namespace) -> int:
     print(f"\nSummary: {available}/{total} providers available")
 
     return EXIT_PROMOTE if available > 0 else EXIT_BLOCKED
+
+
+def _cmd_nanollama_train(args: argparse.Namespace) -> int:
+    """Train nanollama model."""
+    from slm_eval.providers.base import TrainingConfig
+    from slm_eval.providers.nanollama import NanollamaTrainingProvider
+
+    provider = NanollamaTrainingProvider(repo_path=args.repo_path)
+    if not provider.is_available():
+        print("Nanollama not found. Clone from: https://github.com/ariannamethod/nanollama")
+        return EXIT_ERROR
+
+    config = TrainingConfig(
+        framework="nanollama",
+        base_model=args.base_checkpoint or "",
+        dataset=args.data,
+        output_dir=args.output_dir,
+        epochs=args.epochs,
+        batch_size=4,
+        learning_rate=args.lr,
+        lora_r=args.rank,
+        lora_alpha=args.alpha,
+        extra={
+            "mode": args.mode,
+            "model_size": args.model_size,
+            "voice": args.voice,
+            "base_checkpoint": args.base_checkpoint,
+        },
+    )
+
+    try:
+        result = provider.train(config)
+        print(f"\n✅ Training complete: {result}")
+        return EXIT_PROMOTE
+    except Exception as e:
+        print(f"❌ Training failed: {e}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+def _cmd_nanollama_serve(args: argparse.Namespace) -> int:
+    """Serve nanollama model."""
+    from slm_eval.providers.base import ServingConfig
+    from slm_eval.providers.nanollama import (
+        NanollamaGoServingProvider,
+        NanollamaLlamaCppServingProvider,
+        NanollamaOllamaServingProvider,
+    )
+
+    if args.engine == "go":
+        provider = NanollamaGoServingProvider(go_binary=args.go_binary)
+    elif args.engine == "llamacpp":
+        provider = NanollamaLlamaCppServingProvider()
+    elif args.engine == "ollama":
+        provider = NanollamaOllamaServingProvider()
+    else:
+        print(f"Unknown engine: {args.engine}", file=sys.stderr)
+        return EXIT_ERROR
+
+    if not provider.is_available():
+        print(f"{args.engine} engine not available", file=sys.stderr)
+        return EXIT_ERROR
+
+    config = ServingConfig(
+        framework=f"nanollama_{args.engine}",
+        model=args.model,
+        port=args.port,
+        extra={"gamma": args.gamma} if args.gamma else {},
+    )
+
+    try:
+        endpoint = provider.serve(config)
+        print(f"\n✅ Serving at: {endpoint}")
+        return EXIT_PROMOTE
+    except Exception as e:
+        print(f"❌ Serving failed: {e}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+def _cmd_nanollama_info(args: argparse.Namespace) -> int:
+    """Show nanollama model tier info."""
+    from slm_eval.providers.nanollama import MODEL_TIERS
+
+    if args.model_size:
+        if args.model_size not in MODEL_TIERS:
+            print(f"Unknown model size: {args.model_size}", file=sys.stderr)
+            return EXIT_ERROR
+        info = MODEL_TIERS[args.model_size]
+        print(f"\n📦 {args.model_size.upper()} ({info['params']})")
+        print("-" * 40)
+        print(f"  Layers:    {info['layers']}")
+        print(f"  Dim:       {info['dim']}")
+        print(f"  Heads:     {info['heads']}")
+        print(f"  KV Heads:  {info['kv_heads']}")
+        print(f"  FFN:       {info['ffn']}")
+        print(f"  Params:    {info['params']}")
+    else:
+        print("\n📊 Nanollama Model Tiers:")
+        print("-" * 60)
+        print(f"{'Name':<10} {'Layers':<8} {'Dim':<8} {'Heads':<8} {'KV':<6} {'FFN':<8} {'Params':<10}")
+        print("-" * 60)
+        for name, info in MODEL_TIERS.items():
+            print(f"{name:<10} {info['layers']:<8} {info['dim']:<8} {info['heads']:<8} {info['kv_heads']:<6} {info['ffn']:<8} {info['params']:<10}")
+
+    return EXIT_PROMOTE
 
 
 def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
