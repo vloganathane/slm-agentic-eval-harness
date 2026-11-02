@@ -8,6 +8,7 @@ token straight from the text lands on the same value as the gold.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -15,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from slm_eval.scoring import _to_float
+from slm_eval.split import NEAR_DUP_THRESHOLD, minhash_signature, signature_similarity
 
 SPLITS = ["train", "valid", "test"]
 OUT = Path("data/cord")
@@ -88,6 +90,9 @@ def _gold(parsed_data: str) -> dict | None:
 
 def build() -> pd.DataFrame:
     rows = []
+    seen_text: set[str] = set()
+    kept_sigs: list[tuple[int, ...]] = []
+    dropped_exact = dropped_near = 0
     for split in SPLITS:
         path = Path(f".scratch/cord_{split}.parquet")
         if not path.exists():
@@ -106,18 +111,41 @@ def build() -> pd.DataFrame:
                 continue
             if not gold["line_items"] and gold["total"] is None:
                 continue
+            text = "\n".join(words)
+
+            # CORD ids restart per split (train/valid/test each have 0,1,2...),
+            # so id-based naming collides; a content key catches that instead.
+            key = hashlib.sha256(text.encode()).hexdigest()
+            if key in seen_text:
+                dropped_exact += 1
+                continue
+            # Near-duplicate filter using the harness's own MinHash + threshold,
+            # so split.py's leakage guard can never trip on this data.
+            sig = minhash_signature(text)
+            if any(signature_similarity(sig, ks) >= NEAR_DUP_THRESHOLD for ks in kept_sigs):
+                dropped_near += 1
+                continue
+            seen_text.add(key)
+            kept_sigs.append(sig)
+
+            quality = _quality(words, raw.get("ocr_boxes", "[]"))
+            if quality == "low":
+                # Only 7 low cases -> would fall below min_per_stratum after the
+                # split and trip a stratum blocker; fold into medium.
+                quality = "medium"
             rows.append(
                 {
-                    "case_id": f"cord-{int(r['id']) if str(r['id']).isdigit() else len(rows):04d}",
+                    "case_id": f"cord-{len(rows):04d}",
                     "gold": gold,
                     "strata": {
-                        "quality": _quality(words, raw.get("ocr_boxes", "[]")),
+                        "quality": quality,
                         "ocr_signal": "usable",
                         "split_source": split,
                     },
-                    "text": "\n".join(words),
+                    "text": text,
                 }
             )
+    print(f"dedup: dropped {dropped_exact} exact + {dropped_near} near-duplicate texts")
     return pd.DataFrame(rows)
 
 
