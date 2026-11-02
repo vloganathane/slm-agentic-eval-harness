@@ -43,9 +43,7 @@ inference:
   backend: llama_server
   base_url: http://localhost:11434/v1
   timeout_seconds: 1800
-  retry:
-    max_attempts: 3
-    backoff_base: 2
+  retry: {}
   # vLLM backend (backend: vllm). Launch with `slm-eval serve` or run with
   # `slm-eval run --auto-serve`; base_url is then derived from vllm_port.
   vllm_port: 8000

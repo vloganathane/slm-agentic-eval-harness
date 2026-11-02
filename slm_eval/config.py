@@ -220,8 +220,11 @@ class JudgeConfig(BaseModel):
 
 
 class RetryConfig(BaseModel):
-    max_attempts: int = 3
-    backoff_base: float = 2.0
+    # A hosted judge under sustained load returns transient 4xx between calls;
+    # 3 attempts with a short backoff lost a finished 20-minute run, so the
+    # default budget is wide enough to ride out rate limiting.
+    max_attempts: int = 6
+    backoff_base: float = 3.0
 
     @field_validator("max_attempts")
     @classmethod
