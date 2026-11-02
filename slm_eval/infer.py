@@ -52,10 +52,10 @@ def build_extract_prompt(cfg: EvalConfig, text: str) -> str:
     return EXTRACT_TEMPLATE.format(spec=spec, text=text)
 
 
-def infer_case(client: OpenAICompatClient, cfg: EvalConfig, text: str) -> dict[str, Any]:
+def infer_case(client: OpenAICompatClient, cfg: EvalConfig, text: str, *, images: list[str] | None = None) -> dict[str, Any]:
     """Run one case. Returns predicted fields; missing/malformed keys → empty string."""
     prompt = build_extract_prompt(cfg, text)
-    resp = client.complete(prompt, json_mode=True)
+    resp = client.complete(prompt, json_mode=True, images=images)
     try:
         obj = parse_json_response(resp.text)
     except (ValueError, json.JSONDecodeError):
@@ -107,7 +107,7 @@ def run_inference(
             preds[cid] = cache[cid]
             continue
         start = time.monotonic()
-        preds[cid] = infer_case(client, cfg, c["text"])
+        preds[cid] = infer_case(client, cfg, c["text"], images=c.get("images"))
         cache[cid] = preds[cid]
         if cache_file:
             cache_file.write_text(json.dumps(cache, sort_keys=True))

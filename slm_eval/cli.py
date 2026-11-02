@@ -296,7 +296,7 @@ def _make_predictor(cfg: EvalConfig, model_label: str):
         max_attempts=cfg.inference.retry.max_attempts,
         backoff_base=cfg.inference.retry.backoff_base,
     )
-    return lambda case: infer_case(client, cfg, case["text"])
+    return lambda case: infer_case(client, cfg, case["text"], images=case.get("images"))
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

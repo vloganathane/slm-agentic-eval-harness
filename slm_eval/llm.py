@@ -39,7 +39,14 @@ class LLMResponse:
 
 @runtime_checkable
 class LLMClient(Protocol):
-    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse: ...
+    def complete(
+        self,
+        prompt: str,
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.0,
+        images: list[str] | None = None,
+    ) -> LLMResponse: ...
     def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]: ...
 
 
@@ -137,13 +144,27 @@ class OpenAICompatClient:
         self._max_attempts = max_attempts
         self._backoff_base = backoff_base
 
-    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse:
+    def complete(
+        self,
+        prompt: str,
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.0,
+        images: list[str] | None = None,
+    ) -> LLMResponse:
+        """One chat completion. ``images`` are URLs or data: URIs, appended as
+        image_url content parts after the text (OpenAI multimodal shape)."""
         retryer = retry(
             stop=stop_after_attempt(self._max_attempts),
             wait=wait_exponential(multiplier=self._backoff_base),
             reraise=True,
         )(self._once)
-        kwargs: dict[str, Any] = {"model": self._model, "messages": [{"role": "user", "content": prompt}]}
+        content: Any = prompt
+        if images:
+            content = [{"type": "text", "text": prompt}] + [
+                {"type": "image_url", "image_url": {"url": u}} for u in images
+            ]
+        kwargs: dict[str, Any] = {"model": self._model, "messages": [{"role": "user", "content": content}]}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         if temperature > 0:
@@ -179,7 +200,14 @@ class FixtureJudge:
     the κ calibration gate (§6.4) is what makes a judge trustworthy.
     """
 
-    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse:
+    def complete(
+        self,
+        prompt: str,
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.0,
+        images: list[str] | None = None,
+    ) -> LLMResponse:
         text = json.dumps({"verdict": "match", "reason": "fixture judge"})
         return LLMResponse(text=text, tokens_in=len(prompt) // 4, tokens_out=len(text) // 4)
     
@@ -194,9 +222,19 @@ class ScriptedClient:
         self._responses = responses or {}
         self._default = default
         self.calls: list[str] = []
+        self.image_calls: list[list[str]] = []
 
-    def complete(self, prompt: str, *, json_mode: bool = False, temperature: float = 0.0) -> LLMResponse:
+    def complete(
+        self,
+        prompt: str,
+        *,
+        json_mode: bool = False,
+        temperature: float = 0.0,
+        images: list[str] | None = None,
+    ) -> LLMResponse:
         self.calls.append(prompt)
+        if images:
+            self.image_calls.append(list(images))
         text = self._responses.get(prompt, self._default)
         return LLMResponse(text=text, tokens_in=len(prompt) // 4, tokens_out=len(text) // 4)
     
