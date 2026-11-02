@@ -205,6 +205,73 @@ def _cmd_data(args: argparse.Namespace) -> int:
     return EXIT_PROMOTE
 
 
+def _cmd_build_dataset(args: argparse.Namespace) -> int:
+    """Build a clean dataset from a raw source."""
+    from slm_eval.dataset_validator import DatasetValidator, DataQualityReport
+    from slm_eval.commands.dataset_builder import (
+        load_cases,
+        split_stratified_cases,
+        export_cases,
+        quality_report,
+        sha256_json,
+        split_stratified,
+        NEAR_DUP_THRESHOLD,
+        generate_manifest,
+        json,
+    )
+    
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1️⃣ Download / load raw cases
+    raw_dir = out_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    cases = load_cases(args.source, raw_dir)
+    
+    # 2️⃣ Optional validation & dedup
+    if args.validate or args.dedup:
+        validator = DatasetValidator(dedup_threshold=NEAR_DUP_THRESHOLD)
+        report, good_cases, bad_cases = validator.validate(cases)
+        print(report.to_dict())
+        # Save reports
+        (out_dir / "validation_report.json").write_text(json.dumps(report.to_dict(), indent=2))
+        if bad_cases:
+            (out_dir / "bad_cases.jsonl").write_text("\n".join(json.dumps(c) for c in bad_cases))
+        if args.validate:
+            print(f"[VALIDATION] {report.total_cases} cases, {report.valid_cases} valid, {report.invalid_cases} invalid")
+        # Use deduplicated cases for splitting
+        cases = good_cases
+    
+    # 3️⃣ Split (stratified)
+    split_fraction = args.split_fraction
+    split = split_stratified_cases(cases, keys=args.split_keys, fraction=split_fraction, seed=args.seed)
+    
+    # 4️⃣ Export each split
+    for split_name, split_cases in split.items():
+        out_subdir = out_dir / split_name
+        out_subdir.mkdir(parents=True, exist_ok=True)
+        export_cases(split_cases, out_subdir, fmt=args.format, split=split_name)
+    
+    # 5️⃣ Quality score (optional)
+    if args.score:
+        quality = quality_report(cases)
+        (out_dir / "quality_report.json").write_text(json.dumps(quality, indent=2))
+    
+    # 6️⃣ Manifest
+    source_hash = sha256_json(cases)
+    quality_dist = quality_report(cases)
+    generate_manifest(
+        out_dir,
+        source_hash,
+        args.seed,
+        ",".join(args.split_keys),
+        quality_dist,
+        len(cases),
+    )
+    print(f"[BUILD] Clean dataset written to {out_dir}")
+    return 0
+
+
 def _run_id() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
 
@@ -567,6 +634,18 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--strata-keys", nargs="+", default=None, help="Keys to use for stratified splitting")
     c.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     c.set_defaults(func=_cmd_data)
+
+    c = sub.add_parser("build-dataset", help="build a clean, fine-tuning-ready dataset from raw sources")
+    c.add_argument("--source", required=True, help="Path or remote source (HF dataset, Kaggle, local dir, or URL).")
+    c.add_argument("--out", required=True, help="Output directory for the clean dataset.")
+    c.add_argument("--format", choices=["sft", "alpaca", "chatml"], default="sft", help="Fine-tuning format (SFT, Alpaca, or ChatML).")
+    c.add_argument("--split-keys", nargs="+", default=["layout", "quality"], help="Strata keys used for stratified split.")
+    c.add_argument("--split-fraction", type=float, default=0.5, help="Fraction of data to allocate to validation (default 0.5).")
+    c.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    c.add_argument("--validate", action="store_true", help="Run validation and dedup.")
+    c.add_argument("--dedup", action="store_true", help="Enable min-hash dedup.")
+    c.add_argument("--score", action="store_true", help="Generate quality scores.")
+    c.set_defaults(func=_cmd_build_dataset)
 
     c = sub.add_parser("serve", help="launch vLLM OpenAI-compatible server")
     c.add_argument("-c", "--config", required=True, help="Path to eval_config.yaml")

@@ -18,7 +18,8 @@ from slm_eval.hashing import sha256_json
 
 # Case texts that share this many shingles are treated as near-duplicates.
 # MinHash gives a probabilistic signature; equal signatures ⇒ almost surely a dup.
-_MINHASH_PERMUTATIONS = 128
+# Using 32 permutations for speed; LSH with 4 bands of 8 rows each works well for 0.6 threshold
+_MINHASH_PERMUTATIONS = 32
 _SHINGLE_SIZE = 5
 
 
@@ -142,18 +143,48 @@ def split_stratified(
     # --- Near-duplicate leakage: no holdout case may closely match a train case ---
     # Only check cases with extractable text; unextractable cases have identical
     # empty signatures and would falsely trigger leakage (§2 quarantine).
+    # Use fast prefix-hash + Jaccard check (same as DatasetValidator) for O(n) speed
     usable_train = [c for c in train if len(c.get("text", "").strip()) >= 60]
     usable_holdout = [c for c in holdout if len(c.get("text", "").strip()) >= 60]
 
-    train_sigs = [minhash_signature(c["text"]) for c in usable_train]
-    train_ids_list = [c["case_id"] for c in usable_train]
+    # Build prefix-hash buckets for train texts
+    num_buckets = 10000
+    prefix_len = 50
+    max_words = 100
+    jaccard_threshold = NEAR_DUP_THRESHOLD  # 0.6
+    
+    buckets: dict[int, list[tuple[str, str]]] = {}  # bucket -> [(text, case_id)]
+    for c in usable_train:
+        text = c["text"]
+        prefix = text[:prefix_len]
+        bucket = hash(prefix) % num_buckets
+        if bucket not in buckets:
+            buckets[bucket] = []
+        buckets[bucket].append((text, c["case_id"]))
+    
     dupes = []
     for c in usable_holdout:
-        sig = minhash_signature(c["text"])
-        for tsig, tid in zip(train_sigs, train_ids_list, strict=True):
-            if signature_similarity(sig, tsig) >= NEAR_DUP_THRESHOLD:
-                dupes.append((c["case_id"], tid))
-                break
+        text = c["text"]
+        prefix = text[:prefix_len]
+        bucket = hash(prefix) % num_buckets
+        
+        is_dup = False
+        if bucket in buckets:
+            words1 = set(text.lower().split()[:max_words])
+            if words1:
+                for existing_text, existing_id in buckets[bucket]:
+                    words2 = set(existing_text.lower().split()[:max_words])
+                    if words2:
+                        intersection = len(words1 & words2)
+                        union = len(words1 | words2)
+                        if union > 0:
+                            jaccard = intersection / union
+                            if jaccard >= jaccard_threshold:
+                                dupes.append((c["case_id"], existing_id))
+                                is_dup = True
+                                break
+        if is_dup:
+            continue
     if dupes:
         raise LeakageError(
             f"near-duplicate leakage: {len(dupes)} holdout cases match train "

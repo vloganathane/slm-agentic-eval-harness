@@ -15,6 +15,7 @@ slm_eval.db
 runs/
 *.gguf
 .env
+.cache/
 
 # Local inputs (datasets, calibration labels)
 data/
