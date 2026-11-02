@@ -25,7 +25,7 @@ from slm_eval.judge import CalibrationStatus, Judge
 from slm_eval.llm import LLMClient
 from slm_eval.scoring import score_case
 from slm_eval.split import seal_holdout, split_stratified
-from slm_eval.stats import FieldOutcome, bootstrap_micro_f1
+from slm_eval.stats import FieldOutcome, bootstrap_micro_f1, classification_report
 from slm_eval.store import Store
 
 STAGES = ["validate", "split", "infer", "score", "aggregate", "judge_calibrate", "gate"]
@@ -268,6 +268,7 @@ class Orchestrator:
         gate_payload = self._write_gate(
             model_path, model_sha256, split, overall_metric, stratum_results,
             calibration, decision, defect_rate=defect_rate, defect_n=defect_n,
+            classification=self._classification_reports(),
         )
         if self._begin("gate", h_gate):
             self._finish("gate", h_gate, status=decision.status, promote=decision.promote)
@@ -293,6 +294,8 @@ class Orchestrator:
     ) -> None:
         judge = Judge(self.cfg.judge, self.judge_client, self.cfg.task_description)
         outcomes: list[FieldOutcome] = []
+        label_rows: list[dict[str, Any]] = []
+        label_fields = self.cfg.fields.label_fields
         for c in holdout:
             judge_labels: dict[str, bool] = {}
             for fname in self.cfg.fields.subjective_fields:
@@ -301,6 +304,15 @@ class Orchestrator:
                 )
                 judge_labels[fname] = v.correct
                 self.store.add_cost(self.run_id, "score", v.usd, v.tokens_in, v.tokens_out)
+            for fname in label_fields:
+                label_rows.append(
+                    {
+                        "case_id": c["case_id"],
+                        "field": fname,
+                        "gold": c["gold"].get(fname),
+                        "pred": preds[c["case_id"]].get(fname),
+                    }
+                )
             outcomes.extend(
                 score_case(c["case_id"], preds[c["case_id"]], c["gold"], self.cfg, judge_labels)
             )
@@ -316,6 +328,12 @@ class Orchestrator:
         (self.run_dir / "scores.jsonl").write_text(
             "".join(json.dumps(asdict(o), sort_keys=True) + "\n" for o in outcomes)
         )
+        if label_fields:
+            # Persist raw (gold, pred) label pairs so resume can rebuild the
+            # classification report without re-running inference or the judge.
+            (self.run_dir / "labels.jsonl").write_text(
+                "".join(json.dumps(r, sort_keys=True) + "\n" for r in label_rows)
+            )
 
     def _load_outcomes(self) -> list[FieldOutcome]:
         """Read back the score stage's output so resume doesn't recompute it."""
@@ -331,6 +349,26 @@ class Orchestrator:
                 FieldOutcome(case_id=d["case_id"], tp=d["tp"], fp=d["fp"], fn=d["fn"])
             )
         return out
+
+    def _classification_reports(self) -> dict[str, Any]:
+        """Per-label-field classification reports, or {} when none declared.
+
+        Built from labels.jsonl (raw gold/pred pairs), so a resumed run reports
+        identically to a fresh one.
+        """
+        path = self.run_dir / "labels.jsonl"
+        if not path.exists() or not self.cfg.fields.label_fields:
+            return {}
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        reports: dict[str, Any] = {}
+        for fname in self.cfg.fields.label_fields:
+            fr = [r for r in rows if r["field"] == fname]
+            if not fr:
+                continue
+            reports[fname] = classification_report(
+                [str(r["gold"]) for r in fr], [str(r["pred"]) for r in fr]
+            ).to_dict()
+        return reports
 
     def _stratum_metrics(
         self, holdout: list[dict], outcomes: list[FieldOutcome]
@@ -359,6 +397,7 @@ class Orchestrator:
     def _write_gate(
         self, model_path, model_sha256, split, overall, stratum_results,
         calibration, decision, *, defect_rate: float = 0.0, defect_n: int = 0,
+        classification: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "run_id": self.run_id,
@@ -397,6 +436,9 @@ class Orchestrator:
             ),
             "blockers": decision.blockers,
             "warnings": decision.warnings,
+            # Additive: only present when config declares label_fields, so
+            # existing readers of metrics.micro_f1 are unaffected.
+            **({"classification": classification} if classification else {}),
             "pending_reviews": self.store.pending_review_count(self.run_id),
             "cost_usd": round(self.store.cost_total(self.run_id), 6),
             "provenance": {"config_hash": self.cfg.config_hash, "code_version": self.code_version},

@@ -92,6 +92,11 @@ class FieldsConfig(BaseModel):
     # model guesses at the structure (e.g. a bare string instead of a list of
     # objects). Keys must be declared fields; values map attribute -> type.
     item_schemas: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # Subset of exact_match_fields that are classification labels. Scoring is
+    # unchanged (they still score through the same validators); declaring them
+    # additionally emits an accuracy/macro-F1/per-class report, which is the
+    # only way to see a collapsed classifier on imbalanced labels.
+    label_fields: list[str] = Field(default_factory=list)
 
     @field_validator("item_schemas")
     @classmethod
@@ -123,6 +128,14 @@ class FieldsConfig(BaseModel):
         unknown_schema = set(self.item_schemas) - (subj | exact)
         if unknown_schema:
             raise ValueError(f"item_schemas for undeclared fields: {sorted(unknown_schema)}")
+        unknown_labels = set(self.label_fields) - set(self.exact_match_fields)
+        if unknown_labels:
+            raise ValueError(
+                f"label_fields must be exact_match_fields (deterministically scored): "
+                f"{sorted(unknown_labels)}"
+            )
+        if len(self.label_fields) != len(set(self.label_fields)):
+            raise ValueError("duplicate label_fields")
         return self
 
 

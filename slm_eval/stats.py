@@ -9,8 +9,10 @@ rather than pulled in via sklearn.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -92,6 +94,102 @@ def bootstrap_micro_f1(
         ci_upper=float(hi),
         n=n,
         resamples=resamples,
+    )
+
+
+# -- Classification reporting -------------------------------------------------
+#
+# The gate metric (SPEC_V3 §6.5) is element-level micro-F1 and stays untouched.
+# These functions are *additive*: when a config declares `label_fields`, the
+# score stage also emits a per-class report so imbalanced labels can be read
+# honestly (accuracy alone hides a collapsed classifier).
+
+
+@dataclass(frozen=True)
+class ClassRow:
+    """Per-label precision/recall/F1 for one gold label."""
+
+    label: str
+    precision: float
+    recall: float
+    f1: float
+    support: int  # gold occurrences
+
+
+@dataclass(frozen=True)
+class ClassificationReport:
+    accuracy: float
+    macro_f1: float
+    n: int
+    rows: tuple[ClassRow, ...]
+    confusion: dict[tuple[str, str], int]  # (gold, pred) -> count
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "accuracy": round(self.accuracy, 4),
+            "macro_f1": round(self.macro_f1, 4),
+            "n": self.n,
+            "per_class": [
+                {
+                    "label": r.label,
+                    "precision": round(r.precision, 4),
+                    "recall": round(r.recall, 4),
+                    "f1": round(r.f1, 4),
+                    "support": r.support,
+                }
+                for r in self.rows
+            ],
+            "confusion": [
+                {"gold": g, "pred": p, "count": c}
+                for (g, p), c in sorted(self.confusion.items())
+            ],
+        }
+
+
+def classification_report(
+    gold: Sequence[str], pred: Sequence[str], *, normalize: bool = True
+) -> ClassificationReport:
+    """Accuracy + macro-F1 + per-class P/R/F1 + confusion matrix.
+
+    Macro-F1 is the honest headline for imbalanced labels: a classifier that
+    always predicts the majority class scores high accuracy and ~0 macro-F1.
+    Labels not present in gold but predicted (false positives) still get a row
+    with support=0 so the confusion is visible.
+    """
+    if len(gold) != len(pred):
+        raise ValueError(f"label length mismatch: {len(gold)} vs {len(pred)}")
+    if not gold:
+        return ClassificationReport(
+            accuracy=0.0, macro_f1=0.0, n=0, rows=(), confusion={}
+        )
+
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip() if normalize else s
+
+    g = [norm(x) for x in gold]
+    p = [norm(x) for x in pred]
+
+    n = len(g)
+    correct = sum(1 for a, b in zip(g, p, strict=True) if a == b)
+    confusion: dict[tuple[str, str], int] = {}
+    for a, b in zip(g, p, strict=True):
+        confusion[(a, b)] = confusion.get((a, b), 0) + 1
+
+    labels = sorted(set(g) | set(p))
+    rows: list[ClassRow] = []
+    for lab in labels:
+        tp = confusion.get((lab, lab), 0)
+        fp = sum(c for (a, b), c in confusion.items() if b == lab and a != lab)
+        fn = sum(c for (a, b), c in confusion.items() if a == lab and b != lab)
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+        support = sum(c for (a, b), c in confusion.items() if a == lab)
+        rows.append(ClassRow(label=lab, precision=precision, recall=recall, f1=f1, support=support))
+
+    macro = sum(r.f1 for r in rows) / len(rows) if rows else 0.0
+    return ClassificationReport(
+        accuracy=correct / n, macro_f1=macro, n=n, rows=tuple(rows), confusion=confusion
     )
 
 

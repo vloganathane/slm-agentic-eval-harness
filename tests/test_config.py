@@ -136,3 +136,30 @@ def test_from_yaml_garbage(tmp_path):
     p.write_text("just a string")
     with pytest.raises(ConfigError):
         EvalConfig.from_yaml(p)
+
+
+def test_label_fields_subset_accepted():
+    cfg = _cfg(fields={**VALID["fields"], "label_fields": ["tax_id"]})
+    assert cfg.fields.label_fields == ["tax_id"]
+
+
+def test_label_fields_must_be_exact_match():
+    # subjective fields are judge-scored — a label report over judge verdicts
+    # would mix binary verdicts with class labels.
+    with pytest.raises(ValidationError, match="label_fields must be exact_match_fields"):
+        _cfg(fields={**VALID["fields"], "label_fields": ["vendor_name"]})
+
+
+def test_label_fields_must_be_declared():
+    with pytest.raises(ValidationError, match="label_fields must be exact_match_fields"):
+        _cfg(fields={**VALID["fields"], "label_fields": ["nope"]})
+
+
+def test_duplicate_label_fields_rejected():
+    with pytest.raises(ValidationError, match="duplicate label_fields"):
+        _cfg(fields={**VALID["fields"], "label_fields": ["tax_id", "tax_id"]})
+
+
+def test_empty_label_fields_is_default():
+    cfg = _cfg()
+    assert cfg.fields.label_fields == []

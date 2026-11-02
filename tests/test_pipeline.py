@@ -298,3 +298,61 @@ def test_force_overrides_cost_cap(tmp_path):
         )
     finally:
         store.close()
+
+
+def test_classification_report_in_gate(tmp_path):
+    """label_fields -> gate.json carries accuracy/macro-F1/per-class (additive key)."""
+    cfg = _cfg_with(
+        fields={
+            **CFG.model_dump()["fields"],
+            # tax_id is an exact-match regex field; reuse it as a label so the
+            # fixture dataset needs no new schema.
+            "label_fields": ["invoice_number"],
+        }
+    )
+    dataset = _mk_dataset(tmp_path, n=60)
+    golds = {c["case_id"]: c["gold"] for c in fixture.read_dataset(dataset)}
+
+    # A "model" that gets half the invoice numbers wrong -> report must show it.
+    preds = dict(golds)
+    for i, cid in enumerate(sorted(preds)):
+        if i % 2:
+            preds[cid] = {**preds[cid], "invoice_number": f"WRONG-{i:04d}"}
+
+    gate = _run(tmp_path, dataset, "cls-run", predictions=preds, cfg=cfg)
+
+    assert "classification" in gate
+    rep = gate["classification"]["invoice_number"]
+    # Report covers the scored holdout, not the whole dataset.
+    assert rep["n"] == gate["holdout"]["n"]
+    assert 0 < rep["n"] < len(golds)
+    assert 0.0 < rep["accuracy"] < 1.0
+    assert 0.0 < rep["macro_f1"] <= 1.0
+    wrong_labels = {r["label"] for r in rep["per_class"] if r["label"].startswith("WRONG-")}
+    assert wrong_labels, "misclassified labels must appear with support=0"
+    # gate decision keys untouched
+    assert "micro_f1" in gate["metrics"]
+
+
+def test_no_label_fields_no_classification_key(tmp_path):
+    """Default configs emit no classification block — payload stays lean."""
+    dataset = _mk_dataset(tmp_path, n=40)
+    gate = _run(tmp_path, dataset, "nocls-run")
+    assert "classification" not in gate
+
+
+def test_classification_survives_resume(tmp_path):
+    """labels.jsonl is read back on resume, not recomputed."""
+    cfg = _cfg_with(
+        fields={**CFG.model_dump()["fields"], "label_fields": ["invoice_number"]}
+    )
+    dataset = _mk_dataset(tmp_path, n=50)
+    golds = {c["case_id"]: c["gold"] for c in fixture.read_dataset(dataset)}
+    preds = dict(golds)
+    for i, cid in enumerate(sorted(preds)):
+        if i % 3 == 0:
+            preds[cid] = {**preds[cid], "invoice_number": f"WRONG-{i:04d}"}
+
+    g1 = _run(tmp_path, dataset, "cls-resume", predictions=preds, cfg=cfg)
+    g2 = _run(tmp_path, dataset, "cls-resume", predictions=preds, cfg=cfg, resume=True)
+    assert g1["classification"] == g2["classification"]
