@@ -87,6 +87,25 @@ class FieldsConfig(BaseModel):
     subjective_fields: list[str] = Field(default_factory=list)
     exact_match_fields: list[str] = Field(default_factory=list)
     validators: dict[str, FieldValidatorSpec] = Field(default_factory=dict)
+    # Declares the *shape* of a field so the model-under-test is told what to
+    # emit. Without this the extract prompt can only name the fields, and a
+    # model guesses at the structure (e.g. a bare string instead of a list of
+    # objects). Keys must be declared fields; values map attribute -> type.
+    item_schemas: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+    @field_validator("item_schemas")
+    @classmethod
+    def _schema_types(cls, v: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+        allowed = {"string", "number", "integer"}
+        for fname, attrs in v.items():
+            if not attrs:
+                raise ValueError(f"item_schemas[{fname!r}] must declare at least one attribute")
+            for attr, typ in attrs.items():
+                if typ not in allowed:
+                    raise ValueError(
+                        f"item_schemas[{fname!r}].{attr!r}: type {typ!r} not in {sorted(allowed)}"
+                    )
+        return v
 
     @model_validator(mode="after")
     def _consistent(self) -> FieldsConfig:
@@ -101,6 +120,9 @@ class FieldsConfig(BaseModel):
         unknown = set(self.validators) - (subj | exact)
         if unknown:
             raise ValueError(f"validators for undeclared fields: {sorted(unknown)}")
+        unknown_schema = set(self.item_schemas) - (subj | exact)
+        if unknown_schema:
+            raise ValueError(f"item_schemas for undeclared fields: {sorted(unknown_schema)}")
         return self
 
 

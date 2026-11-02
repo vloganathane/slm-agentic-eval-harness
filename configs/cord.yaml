@@ -9,6 +9,11 @@ fields:
     total:
       type: numeric
       tolerance: 0.01
+  item_schemas:
+    line_items:
+      name: string
+      price: number
+      qty: string
 strata:
   keys:
   - quality

@@ -17,10 +17,11 @@ from slm_eval.errors import SlmEvalError
 from slm_eval.llm import OpenAICompatClient, parse_json_response
 
 EXTRACT_TEMPLATE = """Extract the following fields from this receipt/invoice.
-Return ONLY a JSON object with exactly these keys.
+Return ONLY a JSON object with exactly these keys and no others.
 Use an empty string for a field that is not present in the text. Do not invent values.
 
-Fields: {fields}
+Fields and their expected types:
+{spec}
 
 Text:
 {text}
@@ -28,9 +29,27 @@ Text:
 JSON:"""
 
 
+def _field_spec(cfg: EvalConfig, fname: str) -> str:
+    """Describe one field's expected JSON shape.
+
+    A list field with a declared item schema spells out the object shape, which
+    is what stops the model from emitting a bare string for it. Scalar types
+    come from the field's validator where one is declared.
+    """
+    schema = cfg.fields.item_schemas.get(fname)
+    if schema:
+        attrs = ", ".join(f'"{a}": <{t}>' for a, t in schema.items())
+        return f'  "{fname}": [{{{attrs}}}]'
+    validator = cfg.fields.validators.get(fname)
+    if validator is not None and getattr(validator, "type", None) == "numeric":
+        return f'  "{fname}": <number>'
+    return f'  "{fname}": <string>'
+
+
 def build_extract_prompt(cfg: EvalConfig, text: str) -> str:
-    fields = ", ".join(sorted(set(cfg.fields.exact_match_fields + cfg.fields.subjective_fields)))
-    return EXTRACT_TEMPLATE.format(fields=fields, text=text)
+    fields = sorted(set(cfg.fields.exact_match_fields + cfg.fields.subjective_fields))
+    spec = ",\n".join(_field_spec(cfg, f) for f in fields)
+    return EXTRACT_TEMPLATE.format(spec=spec, text=text)
 
 
 def infer_case(client: OpenAICompatClient, cfg: EvalConfig, text: str) -> dict[str, Any]:
