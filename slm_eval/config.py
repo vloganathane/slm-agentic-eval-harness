@@ -72,8 +72,33 @@ class ListValidator(BaseModel):
     item_match: Literal["exact"] = "exact"
 
 
+class SimilarityValidator(BaseModel):
+    """Score a generated string by text similarity instead of exact match.
+
+    Fits the existing element pipe: similarity >= threshold → TP, else FP+FN
+    (so the gate's micro-F1 and bootstrap CI work unchanged), while the raw
+    score is reported alongside as `similarity` in gate.json.
+    """
+
+    type: Literal["similarity"] = "similarity"
+    metric: Literal["rouge_l", "edit_sim", "token_f1"] = "rouge_l"
+    threshold: float = 0.5
+
+    @field_validator("threshold")
+    @classmethod
+    def _unit(cls, v: float) -> float:
+        if not 0.0 < v <= 1.0:
+            raise ValueError("similarity threshold must be in (0, 1]")
+        return v
+
+
 FieldValidatorSpec = Annotated[
-    RegexValidator | NumericValidator | DateValidator | StringValidator | ListValidator,
+    RegexValidator
+    | NumericValidator
+    | DateValidator
+    | StringValidator
+    | ListValidator
+    | SimilarityValidator,
     Field(discriminator="type"),
 ]
 

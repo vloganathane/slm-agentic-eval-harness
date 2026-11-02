@@ -138,3 +138,100 @@ def test_score_case_missing_judge_label_counts_incorrect():
 def test_numeric_validator_tolerates_currency_formatting(pred, gold, expected_match):
     tp, _fp, _fn = score_field(pred, gold, NumericValidator(tolerance=0.0))
     assert bool(tp) is expected_match
+
+
+# --- similarity validator ----------------------------------------------------
+
+
+def _sim_cfg(**v):
+    from slm_eval.config import EvalConfig
+
+    return EvalConfig.model_validate(
+        {
+            "task_description": "t",
+            "task_type": "extraction",
+            "fields": {
+                "exact_match_fields": ["summary"],
+                "validators": {"summary": {"type": "similarity", **v}},
+            },
+            "strata": {"keys": ["q"], "mode": "single_key"},
+            "split": {"fraction": 0.5, "seed": 1, "strategy": "stratified"},
+            "stats": {"seed": 1, "resamples": 1000},
+            "thresholds": {"target_f1": 0.85, "failure_threshold": 0.5, "min_per_stratum": 5},
+        }
+    )
+
+
+def test_similarity_validator_pass_at_threshold():
+    cfg = _sim_cfg(metric="token_f1", threshold=0.5)
+    v = cfg.fields.validators["summary"]
+    # identical -> 1.0 >= 0.5
+    assert score_field("a b", "a b", v) == (1, 0, 0)
+
+
+def test_similarity_validator_fail_below_threshold():
+    cfg = _sim_cfg(metric="token_f1", threshold=0.9)
+    v = cfg.fields.validators["summary"]
+    # partial overlap 2/3 < 0.9 -> miss, counts as FP+FN like any scalar miss
+    assert score_field("a b c", "a b d", v) == (0, 1, 1)
+
+
+def test_similarity_validator_threshold_boundary_is_inclusive():
+    cfg = _sim_cfg(metric="edit_sim", threshold=2 / 3)
+    v = cfg.fields.validators["summary"]
+    # edit_sim("cat","car") == 2/3 exactly -> pass
+    assert score_field("cat", "car", v) == (1, 0, 0)
+
+
+def test_similarity_validator_config_validation():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="threshold must be in"):
+        _sim_cfg(threshold=0.0)
+    with pytest.raises(ValidationError, match="threshold must be in"):
+        _sim_cfg(threshold=1.5)
+    with pytest.raises(ValidationError, match="literal_error|not a permitted"):
+        _sim_cfg(metric="bleu")
+
+
+def test_similarity_scores_reports_raw_values():
+    import pytest
+
+    from slm_eval.config import EvalConfig
+    from slm_eval.scoring import similarity_scores
+
+    cfg = _sim_cfg(metric="token_f1", threshold=0.5)
+    rows = similarity_scores("c1", {"summary": "a b c"}, {"summary": "a b d"}, cfg)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["case_id"] == "c1"
+    assert r["field"] == "summary"
+    assert r["metric"] == "token_f1"
+    assert r["score"] == pytest.approx(2 / 3, abs=1e-5)
+
+
+def test_similarity_scores_skips_empty_gold():
+    from slm_eval.scoring import similarity_scores
+
+    cfg = _sim_cfg()
+    assert similarity_scores("c1", {"summary": "x"}, {"summary": ""}, cfg) == []
+    assert similarity_scores("c1", {"summary": "x"}, {}, cfg) == []
+
+
+def test_similarity_scores_empty_when_no_similarity_validators():
+    from slm_eval.config import EvalConfig
+    from slm_eval.scoring import similarity_scores
+
+    cfg = EvalConfig.model_validate(
+        {
+            "task_description": "t",
+            "task_type": "extraction",
+            "fields": {"exact_match_fields": ["total"], "validators": {"total": {"type": "numeric"}}},
+            "strata": {"keys": ["q"], "mode": "single_key"},
+            "split": {"fraction": 0.5, "seed": 1, "strategy": "stratified"},
+            "stats": {"seed": 1, "resamples": 1000},
+            "thresholds": {"target_f1": 0.85, "failure_threshold": 0.5, "min_per_stratum": 5},
+        }
+    )
+    assert similarity_scores("c1", {"total": 1}, {"total": 1}, cfg) == []

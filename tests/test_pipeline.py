@@ -356,3 +356,44 @@ def test_classification_survives_resume(tmp_path):
     g1 = _run(tmp_path, dataset, "cls-resume", predictions=preds, cfg=cfg)
     g2 = _run(tmp_path, dataset, "cls-resume", predictions=preds, cfg=cfg, resume=True)
     assert g1["classification"] == g2["classification"]
+
+
+def test_similarity_summary_in_gate(tmp_path):
+    """SimilarityValidator -> gate.json gains additive 'similarity' block."""
+    cfg = _cfg_with(
+        fields={
+            **CFG.model_dump()["fields"],
+            # Reuse `date` as a similarity-scored string field: predictions that
+            # match score 1.0, deliberately-corrupted ones score lower.
+            "exact_match_fields": ["invoice_number", "date", "total", "tax_id", "line_items", "description"],
+            "subjective_fields": ["vendor_name", "address"],
+            "validators": {
+                **CFG.model_dump()["fields"]["validators"],
+                "description": {"type": "similarity", "metric": "edit_sim", "threshold": 0.5},
+            },
+        }
+    )
+    dataset = _mk_dataset(tmp_path, n=60)
+    golds = {c["case_id"]: c["gold"] for c in fixture.read_dataset(dataset)}
+    preds = dict(golds)
+    for i, cid in enumerate(sorted(preds)):
+        if i % 2:
+            preds[cid] = {**preds[cid], "description": "totally different text"}
+
+    gate = _run(tmp_path, dataset, "sim-run", predictions=preds, cfg=cfg)
+
+    assert "similarity" in gate
+    s = gate["similarity"]["description"]
+    assert s["metric"] == "edit_sim"
+    assert s["threshold"] == 0.5
+    assert s["n"] == gate["holdout"]["n"]
+    assert 0.0 < s["mean"] < 1.0
+    assert 0.0 < s["pass_rate"] < 1.0
+    assert s["min"] <= s["mean"] <= s["max"]
+    assert "micro_f1" in gate["metrics"]  # gate metric untouched
+
+
+def test_no_similarity_validators_no_key(tmp_path):
+    dataset = _mk_dataset(tmp_path, n=30)
+    gate = _run(tmp_path, dataset, "nosim-run")
+    assert "similarity" not in gate

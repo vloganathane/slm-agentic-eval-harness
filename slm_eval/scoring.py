@@ -16,8 +16,10 @@ from slm_eval.config import (
     ListValidator,
     NumericValidator,
     RegexValidator,
+    SimilarityValidator,
     StringValidator,
 )
+from slm_eval.similarity import similarity as _similarity
 from slm_eval.stats import FieldOutcome
 
 DEFAULT_NORMALIZE = ("trim", "collapse_ws")
@@ -68,6 +70,8 @@ def _to_float(value: Any) -> float | None:
 
 
 def _scalar_equal(pred: Any, gold: Any, validator: Any) -> bool:
+    if isinstance(validator, SimilarityValidator):
+        return _similarity(validator.metric, str(pred or ""), str(gold or "")) >= validator.threshold
     if isinstance(validator, RegexValidator):
         return re.fullmatch(validator.pattern, normalize(pred)) is not None and normalize(
             pred
@@ -165,3 +169,36 @@ def score_case(
             outcomes.append(FieldOutcome(case_id=case_id, tp=0, fp=1, fn=1))
 
     return outcomes
+
+
+def similarity_scores(
+    case_id: str,
+    prediction: dict[str, Any],
+    gold: dict[str, Any],
+    cfg: EvalConfig,
+) -> list[dict[str, Any]]:
+    """Raw similarity values (0..1) for fields declaring a SimilarityValidator.
+
+    The gate sees the thresholded pass/fail (via score_field); these raw scores
+    are reported alongside so a 0.49 and a 0.0 are distinguishable — the binary
+    element alone can't show how close a miss was.
+    """
+    rows: list[dict[str, Any]] = []
+    for fname, validator in cfg.fields.validators.items():
+        if not isinstance(validator, SimilarityValidator):
+            continue
+        pred_v, gold_v = prediction.get(fname), gold.get(fname)
+        if gold_v in (None, ""):
+            continue  # nothing to compare against — not a miss, not a hit
+        rows.append(
+            {
+                "case_id": case_id,
+                "field": fname,
+                "metric": validator.metric,
+                "threshold": validator.threshold,
+                "score": round(
+                    _similarity(validator.metric, str(pred_v or ""), str(gold_v)), 6
+                ),
+            }
+        )
+    return rows

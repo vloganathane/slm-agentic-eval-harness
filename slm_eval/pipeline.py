@@ -23,7 +23,7 @@ from slm_eval.gate import GateInputs, StratumResult, dataset_defect_rate, decide
 from slm_eval.hashing import sha256_json
 from slm_eval.judge import CalibrationStatus, Judge
 from slm_eval.llm import LLMClient
-from slm_eval.scoring import score_case
+from slm_eval.scoring import score_case, similarity_scores
 from slm_eval.split import seal_holdout, split_stratified
 from slm_eval.stats import FieldOutcome, bootstrap_micro_f1, classification_report
 from slm_eval.store import Store
@@ -269,6 +269,7 @@ class Orchestrator:
             model_path, model_sha256, split, overall_metric, stratum_results,
             calibration, decision, defect_rate=defect_rate, defect_n=defect_n,
             classification=self._classification_reports(),
+            similarity=self._similarity_summary(),
         )
         if self._begin("gate", h_gate):
             self._finish("gate", h_gate, status=decision.status, promote=decision.promote)
@@ -295,6 +296,7 @@ class Orchestrator:
         judge = Judge(self.cfg.judge, self.judge_client, self.cfg.task_description)
         outcomes: list[FieldOutcome] = []
         label_rows: list[dict[str, Any]] = []
+        sim_rows: list[dict[str, Any]] = []
         label_fields = self.cfg.fields.label_fields
         for c in holdout:
             judge_labels: dict[str, bool] = {}
@@ -313,6 +315,9 @@ class Orchestrator:
                         "pred": preds[c["case_id"]].get(fname),
                     }
                 )
+            sim_rows.extend(
+                similarity_scores(c["case_id"], preds[c["case_id"]], c["gold"], self.cfg)
+            )
             outcomes.extend(
                 score_case(c["case_id"], preds[c["case_id"]], c["gold"], self.cfg, judge_labels)
             )
@@ -333,6 +338,11 @@ class Orchestrator:
             # classification report without re-running inference or the judge.
             (self.run_dir / "labels.jsonl").write_text(
                 "".join(json.dumps(r, sort_keys=True) + "\n" for r in label_rows)
+            )
+        if sim_rows:
+            # Raw similarity scores: same resume rationale as labels.jsonl.
+            (self.run_dir / "similarity.jsonl").write_text(
+                "".join(json.dumps(r, sort_keys=True) + "\n" for r in sim_rows)
             )
 
     def _load_outcomes(self) -> list[FieldOutcome]:
@@ -370,6 +380,34 @@ class Orchestrator:
             ).to_dict()
         return reports
 
+    def _similarity_summary(self) -> dict[str, Any]:
+        """Per-field aggregate of raw similarity scores, or {} when none used.
+
+        Reported alongside the thresholded gate element: the gate answers
+        "did it pass?", this answers "how close was it?" — a field sitting at
+        0.49 against a 0.5 threshold is a different problem from one at 0.05.
+        """
+        path = self.run_dir / "similarity.jsonl"
+        if not path.exists():
+            return {}
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        out: dict[str, Any] = {}
+        for fname in sorted({r["field"] for r in rows}):
+            fr = [r for r in rows if r["field"] == fname]
+            scores = [r["score"] for r in fr]
+            out[fname] = {
+                "metric": fr[0]["metric"],
+                "threshold": fr[0]["threshold"],
+                "n": len(scores),
+                "mean": round(sum(scores) / len(scores), 4),
+                "min": round(min(scores), 4),
+                "max": round(max(scores), 4),
+                "pass_rate": round(
+                    sum(1 for s in scores if s >= fr[0]["threshold"]) / len(scores), 4
+                ),
+            }
+        return out
+
     def _stratum_metrics(
         self, holdout: list[dict], outcomes: list[FieldOutcome]
     ) -> list[StratumResult]:
@@ -398,6 +436,7 @@ class Orchestrator:
         self, model_path, model_sha256, split, overall, stratum_results,
         calibration, decision, *, defect_rate: float = 0.0, defect_n: int = 0,
         classification: dict[str, Any] | None = None,
+        similarity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "run_id": self.run_id,
@@ -439,6 +478,7 @@ class Orchestrator:
             # Additive: only present when config declares label_fields, so
             # existing readers of metrics.micro_f1 are unaffected.
             **({"classification": classification} if classification else {}),
+            **({"similarity": similarity} if similarity else {}),
             "pending_reviews": self.store.pending_review_count(self.run_id),
             "cost_usd": round(self.store.cost_total(self.run_id), 6),
             "provenance": {"config_hash": self.cfg.config_hash, "code_version": self.code_version},
