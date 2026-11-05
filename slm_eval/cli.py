@@ -207,7 +207,7 @@ def _cmd_data(args: argparse.Namespace) -> int:
 
 def _cmd_build_dataset(args: argparse.Namespace) -> int:
     """Build a clean dataset from a raw source (unified pipeline)."""
-    from slm_eval.pipelines.builder import build_dataset, BuildConfig
+    from slm_eval.pipelines.builder import BuildConfig, build_dataset
 
     # Validate fractions sum to ~1
     total_frac = args.train_frac + args.valid_frac + args.test_frac
@@ -489,15 +489,15 @@ def _cmd_report(args: argparse.Namespace) -> int:
     from datetime import UTC, datetime
 
     from jinja2 import Environment, FileSystemLoader
-    
+
     run_dir = Path(args.run_dir)
     gate_file = run_dir / "gate.json"
     if not gate_file.exists():
         print(f"Gate file not found: {gate_file}", file=sys.stderr)
         return EXIT_ERROR
-    
+
     gate = json.loads(gate_file.read_text())
-    
+
     # Load review tasks if config provided
     reviews = []
     error_categories = {}
@@ -509,7 +509,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
             error_categories = store.get_error_summary(run_id)
         finally:
             store.close()
-    
+
     # Prepare template context
     ctx = {
         "run_id": gate.get("run_id", run_dir.name),
@@ -544,22 +544,22 @@ def _cmd_report(args: argparse.Namespace) -> int:
         "run_dir": str(run_dir),
         "schema_version": gate.get("schema_version", 1),
     }
-    
+
     template_path = Path(__file__).parent / "templates" / "report.md.j2"
     if not template_path.exists():
         print(f"Template not found: {template_path}", file=sys.stderr)
         return EXIT_ERROR
-    
+
     env = Environment(loader=FileSystemLoader(template_path.parent))
     template = env.get_template(template_path.name)
     output = template.render(**ctx)
-    
+
     if args.output:
         Path(args.output).write_text(output)
         print(f"Report written to {args.output}")
     else:
         print(output)
-    
+
     return EXIT_PROMOTE
 
 
@@ -777,19 +777,19 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
     cfg = EvalConfig.from_yaml(args.config)
     runs_dir = Path(args.runs_dir)
     runs_dir.mkdir(parents=True, exist_ok=True)
-    
+
     consecutive_passes = 0
     round_num = 0
-    
+
     while consecutive_passes < args.rounds:
         round_num += 1
         run_id = f"synth-loop-r{round_num}"
         run_dir = runs_dir / run_id
-        
+
         print(f"\n{'='*60}")
         print(f"SYNTHETIC LOOP ROUND {round_num} (consecutive passes: {consecutive_passes}/{args.rounds})")
         print(f"{'='*60}")
-        
+
         # 1. Run evaluation
         cmd = [
             sys.executable, "-m", "slm_eval.cli", "run",
@@ -801,22 +801,22 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
         ]
         if args.no_idiot_index:
             cmd.append("--no-idiot-index")
-        
+
         print(f"Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=False, check=False)
         if result.returncode != 0 and result.returncode != 1:  # 1 = blocked is OK
             print(f"Run failed with exit code {result.returncode}")
             return EXIT_ERROR
-        
+
         # 2. Check gate
         gate_file = run_dir / "gate.json"
         if not gate_file.exists():
             print(f"Gate file not found: {gate_file}")
             return EXIT_ERROR
-        
+
         gate = json.loads(gate_file.read_text())
         promote = gate.get("decision", {}).get("promote", False)
-        
+
         if promote:
             consecutive_passes += 1
             print(f"✅ Round {round_num} PASSED (consecutive: {consecutive_passes}/{args.rounds})")
@@ -826,7 +826,7 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
         else:
             consecutive_passes = 0
             print(f"❌ Round {round_num} BLOCKED: {gate.get('decision', {}).get('reason', 'unknown')}")
-            
+
             # 3. Generate synthetic cases
             print(f"Generating {args.n_per_round} synthetic cases...")
             result = generate_synthetic_cases(
@@ -836,11 +836,11 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
                 web_api_key=args.web_api_key,
             )
             print(f"Proposed: {result.proposed}, Novel: {result.novel}, Duplicate: {result.duplicate}")
-            
+
             if result.novel == 0:
                 print("No novel cases generated. Stopping.")
                 return EXIT_ERROR
-            
+
             # 4. Inject as review tasks
             store = Store(Path(args.config).parent / "slm_eval.db")
             try:
@@ -848,11 +848,11 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
                 print(f"Injected {inserted} cases as review tasks")
             finally:
                 store.close()
-            
+
             print(f"\n⏳ Awaiting human review for run {run_id}...")
             print(f"   Run: slm-eval review -c {args.config} {run_id} list")
             print(f"   Resolve with: slm-eval review -c {args.config} {run_id} resolve --case-id <id> --reason synthetic_injection --decision approve")
-            
+
             # 5. Wait for reviews to be resolved
             while True:
                 store = Store(Path(args.config).parent / "slm_eval.db")
@@ -867,9 +867,9 @@ def _cmd_synthetic_loop(args: argparse.Namespace) -> int:
                 finally:
                     store.close()
                 time.sleep(30)
-            
+
             print("✅ All synthetic reviews resolved. Continuing to next round.")
-    
+
     return EXIT_PROMOTE
 
 
@@ -884,7 +884,7 @@ def _cmd_synthetic(args: argparse.Namespace) -> int:
         return EXIT_ERROR
 
     result = generate_synthetic_cases(
-        cfg, holdout_dir, args.n, args.threshold, 
+        cfg, holdout_dir, args.n, args.threshold,
         model=args.model,
         use_web=args.use_web,
         web_provider=args.web_provider,
@@ -1010,10 +1010,13 @@ def _cmd_idiot_index(args) -> int:
 
 def _cmd_train(args) -> int:
     """LoRA fine-tuning with evaluation integration."""
-    import json
     import os
     import sys
-    from pathlib import Path
+    import time
+
+    import wandb
+
+    from slm_eval.train import train_lora
 
     # Budget guard: the eval round that validates this adapter must fit --max-cost.
     try:
@@ -1030,15 +1033,9 @@ def _cmd_train(args) -> int:
         )
         return EXIT_ERROR
 
-    import torch
-    import wandb
-    from datasets import load_dataset
-    from peft import LoraConfig, get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl import SFTConfig, SFTTrainer
-
-    # Initialize wandb
-    if os.getenv("WANDB_API_KEY"):
+    # Initialize wandb if configured (CLI-specific feature)
+    use_wandb = bool(os.getenv("WANDB_API_KEY"))
+    if use_wandb:
         wandb.init(
             project="slm-training",
             name=args.run_id or f"train-{int(time.time())}",
@@ -1054,110 +1051,38 @@ def _cmd_train(args) -> int:
     print(f"  Learning rate: {args.lr}")
     print(f"  LoRA: {args.use_lora} (r={args.lora_r}, alpha={args.lora_alpha})")
 
-    # Prepare dataset
-    if args.dataset:
-        dataset_path = Path(args.dataset)
-        if not dataset_path.exists():
-            print(f"Dataset not found: {dataset_path}", file=sys.stderr)
-            return 2
-        dataset = load_dataset("json", data_files=str(dataset_path))
-    else:
-        # Generate synthetic data for testing
-        print("No dataset provided, generating synthetic data...")
-        data = [{"text": "Extract receipt: total amount 100.00, items: coffee, sandwich, drink."} for _ in range(100)]
-        dataset = load_dataset("json", data=data)
-
-    # Create model
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-
-    has_cuda = torch.cuda.is_available()
-    if has_cuda:
-        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    else:
-        dtype = torch.float32
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype=dtype,
-        device_map="auto" if has_cuda else None,
-    )
-
-    if args.use_lora:
-        lora_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-        model = get_peft_model(model, lora_config)
-        trainable, total = model.get_nb_trainable_parameters()
-        print(f"LoRA applied. Trainable params: {trainable:,} / {total:,}")
-
-    # Training arguments — TRL >= 1.0 expects the SFT-specific knobs on
-    # SFTConfig (dataset_text_field / max_length / packing), not on the trainer.
-    training_args = SFTConfig(
-        output_dir=args.output_dir,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=4,
-        learning_rate=args.lr,
-        logging_steps=10,
-        save_steps=500,
-        warmup_steps=min(100, max(1, args.epochs)),
-        gradient_checkpointing=has_cuda,
-        fp16=has_cuda and not torch.cuda.is_bf16_supported(),
-        bf16=has_cuda and torch.cuda.is_bf16_supported(),
-        report_to="wandb" if os.getenv("WANDB_API_KEY") else "none",
-        run_name=args.run_id or f"train-{int(time.time())}",
-        max_length=1024,
-        dataset_text_field="text",
-        packing=False,
-    )
-
-    trainer = SFTTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset.get("test"),
-        processing_class=tokenizer,
-    )
-
-    # Train
-    print("Starting training...")
     try:
-        trainer.train(resume_from_checkpoint=args.resume)
-        print("Training completed successfully!")
-    except Exception as e:  # noqa: BLE001 — surface any trainer failure as exit 2
+        result = train_lora(
+            model=args.model,
+            dataset_path=args.dataset,
+            config_path=args.config,
+            output_dir=args.output_dir,
+            run_id=args.run_id,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.lr,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=0.05,
+            use_lora=args.use_lora,
+        )
+    except Exception as e:  # noqa: BLE001 — surface any training failure as exit 2
         print(f"Training error: {e}", file=sys.stderr)
+        if use_wandb and wandb.run:
+            wandb.finish()
         return 2
 
-    # Save final model
-    final_model_path = Path(args.output_dir) / f"{args.run_id or 'model'}_final"
-    if trainer.is_world_process_zero():
-        trainer.save_model(final_model_path)
-        tokenizer.save_pretrained(final_model_path)
-
-        # Save training config (drop the argparse handler, which isn't JSON)
-        config_path = Path(args.output_dir) / f"{args.run_id or 'model'}_config.json"
-        train_config = {k: v for k, v in vars(args).items() if not callable(v)}
-        with open(config_path, "w") as f:
-            json.dump(train_config, f, indent=2)
-
-        print(f"Model saved to: {final_model_path}")
-        print(f"Config saved to: {config_path}")
-
-    if wandb.run:
-        wandb.finish()
-
+    # Print summary (mirrors train.py main() output)
     print("\n=== Training Complete ===")
-    print(f"Run ID: {args.run_id or 'model'}")
-    print(f"Output directory: {args.output_dir}")
-    print(f"Model size: {trainer.model.num_parameters():,} parameters")
-    print(f"Learnable parameters: {sum(p.numel() for p in trainer.model.parameters() if p.requires_grad):,}")
+    print(f"Run ID: {result.run_id}")
+    print(f"Model: {result.model_path}")
+    print(f"Adapter: {result.adapter_path}")
+    print(f"Config: {result.config_path}")
+    print(f"Trainable params: {result.trainable_params:,}")
+    print(f"Total params: {result.total_params:,}")
+
+    if use_wandb and wandb.run:
+        wandb.finish()
 
     return 0
 
