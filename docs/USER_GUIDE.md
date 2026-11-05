@@ -411,6 +411,160 @@ slm-eval ocr --images-dir data/images/ --output-dir data/ocr/
 
 ---
 
+## Unified Dataset Pipeline (`build-dataset`)
+
+The **new unified pipeline** (`build-dataset`) replaces the legacy `data` command and provides a complete, domain-independent workflow:
+
+```
+raw data (HF/Kaggle/URL/local) → validate → dedup → split → export → manifest
+```
+
+### Quick Start
+
+```bash
+# From local JSONL directory
+slm-eval build-dataset \
+  --source data/raw/ \
+  --out data/clean/ \
+  --format chatml \
+  --template generic
+
+# From Hugging Face dataset
+slm-eval build-dataset \
+  --source org/dataset-name \
+  --out data/clean/ \
+  --format sharegpt \
+  --template qa
+
+# From Kaggle
+slm-eval build-dataset \
+  --source org/dataset-name \
+  --out data/clean/ \
+  --format alpaca \
+  --template receipt_extraction
+
+# From URL
+slm-eval build-dataset \
+  --source https://example.com/data.jsonl \
+  --out data/clean/ \
+  --format openai
+```
+
+### Pipeline Stages
+
+| Stage | Description | Config |
+|-------|-------------|--------|
+| **1. Load** | Download/load from HF, Kaggle, URL, local file/dir | `--source`, `--skip-download` |
+| **2. Validate** | Check required fields (case_id, text, gold, strata), type validation | `--validate` / `--no-validate` |
+| **3. Dedup** | Exact SHA-256 + near-duplicate (prefix-hash + Jaccard ≥ 0.6) | `--dedup` / `--no-dedup` |
+| **4. Split** | Stratified 3-way (train/valid/test), leakage detection | `--split-keys`, `--train-frac`, `--valid-frac`, `--test-frac`, `--seed` |
+| **5. Export** | 6 formats with configurable templates | `--format`, `--template` |
+| **6. Manifest** | JSON manifest with source hash, split info, quality metrics | Auto-generated |
+
+### Export Formats
+
+| Format | Description | Use Case |
+|--------|-------------|----------|
+| `sft` | Simple gold-as-JSON | Basic fine-tuning |
+| `alpaca` | Instruction/input/output | Alpaca-style training |
+| `chatml` | System/user/assistant messages | ChatML-compatible models |
+| `sharegpt` | Human/GPT conversations | LLaMA-Factory, FastChat |
+| `openai` | OpenAI Chat Completions API | OpenAI fine-tuning API |
+| `completion` | Prompt/completion | Causal LM (no chat template) |
+
+### Predefined Templates
+
+| Template | Domain | Best For |
+|----------|--------|----------|
+| `receipt_extraction` | Invoice/receipt parsing | Total, line items, vendor |
+| `qa` | Question answering | Context + question → answer |
+| `summarization` | Text summarization | Document → summary |
+| `classification` | Text classification | Text → label |
+| `generic` | General purpose | Any extraction task |
+
+### Advanced Options
+
+```bash
+slm-eval build-dataset \
+  --source data/raw/ \
+  --out data/clean/ \
+  --format chatml \
+  --template receipt_extraction \
+  --split-keys quality layout_type \
+  --train-frac 0.8 \
+  --valid-frac 0.1 \
+  --test-frac 0.1 \
+  --seed 42 \
+  --min-per-stratum 5 \
+  --no-validate \
+  --no-dedup \
+  --no-score \
+  --skip-download \
+  --no-progress
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--split-keys` | `["quality"]` | Strata keys for stratified split |
+| `--train-frac` | `0.8` | Train fraction |
+| `--valid-frac` | `0.1` | Validation fraction |
+| `--test-frac` | `0.1` | Test fraction |
+| `--seed` | `42` | Random seed |
+| `--min-per-stratum` | `1` | Minimum cases per stratum |
+| `--validate` | `on` | Run validation |
+| `--dedup` | `on` | Enable deduplication |
+| `--score` | `on` | Generate quality report |
+| `--skip-download` | `off` | Use local source directly |
+| `--no-progress` | `off` | Disable progress output |
+
+### Output Structure
+
+```
+data/clean/
+├── manifest.json          # Build metadata + provenance
+├── validation_report.json # Validation + dedup stats
+├── quality_report.json    # Text stats, gold coverage, strata dist
+├── bad_cases.jsonl        # Invalid cases (if any)
+├── train/
+│   └── train.jsonl        # Training split in chosen format
+├── valid/
+│   └── valid.jsonl        # Validation split
+└── test/
+    └── test.jsonl         # Test split
+```
+
+### Example: Receipt Extraction
+
+```bash
+slm-eval build-dataset \
+  --source data/raw_receipts/ \
+  --out data/receipts_clean/ \
+  --format chatml \
+  --template receipt_extraction \
+  --split-keys quality ocr_signal \
+  --train-frac 0.8 --valid-frac 0.1 --test-frac 0.1
+```
+
+Produces ChatML format with system prompt: *"You are a receipt information extraction assistant."* and user template: *"Extract the following fields from the receipt text:\n\n{text}"*
+
+### Leakage Protection
+
+The pipeline guarantees **no data leakage** between splits:
+- Exact ID overlap check
+- Near-duplicate detection (Jaccard ≥ 0.6) across train/valid/test boundaries
+- Fails fast if leakage detected
+
+### Domain Independence
+
+The pipeline is **completely domain-agnostic**. Only the template changes:
+- Receipt extraction → `receipt_extraction` template
+- QA → `qa` template (needs `question`/`answer` in gold)
+- Summarization → `summarization` template (needs `summary` in gold)
+- Classification → `classification` template (needs `label` in gold)
+- Custom → provide `--custom-template` JSON or modify `DEFAULT_TEMPLATES` in code
+
+---
+
 ## LoRA Fine-Tuning
 
 ### Requirements
@@ -669,12 +823,14 @@ Note: Modal Starter plan requires payment method for GPU access. CPU-only works 
 | `slm-eval init` | Initialize project structure and config |
 | `slm-eval run -c <config>` | Run full evaluation pipeline |
 | `slm-eval gate <run_id>` | Check gate status for a run |
+| `slm-eval build-dataset` | **Build clean, fine-tuning-ready dataset from raw sources** (HF, Kaggle, URL, local) |
 
 ### Dataset Commands
 
 | Command | Description |
 |---------|-------------|
-| `slm-eval data --cases-dir <dir>` | Validate, dedup, stratified split |
+| `slm-eval build-dataset` | **Build clean, fine-tuning-ready dataset from raw sources** (HF, Kaggle, URL, local) |
+| `slm-eval data --cases-dir <dir>` | Validate, dedup, stratified split (legacy) |
 | `slm-eval ocr --images-dir <dir>` | Extract text from images (OCR) |
 
 ### Training Commands

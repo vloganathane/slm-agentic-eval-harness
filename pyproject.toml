@@ -76,6 +76,7 @@ modal = ["modal"]
 serve = ["vllm"]
 ocr = ["pytesseract", "Pillow"]
 viz = ["matplotlib", "seaborn"]
+docling = ["docling"]
 
 # Multi-provider inference
 anthropic = ["anthropic"]
