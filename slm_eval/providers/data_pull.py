@@ -202,11 +202,28 @@ class URLDownloader(DataDownloader):
         import tarfile
         import zipfile
 
+        # Resolve destination to absolute path for safe comparison
+        dest = dest.resolve()
+
         if archive.suffix == ".zip":
             with zipfile.ZipFile(archive, "r") as zf:
+                for member in zf.namelist():
+                    # Validate member path to prevent ZipSlip (path traversal)
+                    member_path = (dest / member).resolve()
+                    try:
+                        member_path.relative_to(dest)
+                    except ValueError:
+                        raise SlmEvalError(f"ZipSlip attempt detected: member '{member}' would escape destination")
                 zf.extractall(dest)
         elif archive.suffix in (".tar", ".gz", ".tgz"):
             with tarfile.open(archive, "r:*") as tf:
+                for member in tf.getmembers():
+                    # Validate member path to prevent TarSlip (path traversal)
+                    member_path = (dest / member.name).resolve()
+                    try:
+                        member_path.relative_to(dest)
+                    except ValueError:
+                        raise SlmEvalError(f"TarSlip attempt detected: member '{member.name}' would escape destination")
                 tf.extractall(dest)
         else:
             raise SlmEvalError(f"Unsupported archive format: {archive.suffix}")

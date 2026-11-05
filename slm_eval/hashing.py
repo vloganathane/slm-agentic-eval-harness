@@ -1,11 +1,13 @@
 """Content addressing: SHA-256 for files, directories, and canonical JSON (SPEC_V3 §4.3).
 MinHash for near-duplicate detection (SPEC_V3 §5.2 leakage check, M3 synthetic dedup).
+Global seeding for reproducibility across random, numpy, torch, and transformers.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 from pathlib import Path
 from typing import Any
@@ -92,3 +94,47 @@ def minhash_similarity(sig1: list[int] | str, sig2: list[int] | str) -> float:
         return 0.0
     matches = sum(1 for i in range(n) if sig1[i] == sig2[i])
     return matches / n
+
+
+# -- Global seeding --------------------------------------------------------------
+
+def set_global_seed(seed: int) -> None:
+    """Seed all random number generators for reproducibility.
+
+    Sets seeds for:
+    - Python's built-in random module
+    - NumPy (if available)
+    - PyTorch CPU and CUDA (if available)
+    - Transformers (if available)
+
+    Also sets PYTHONHASHSEED and TF/CUDA deterministic flags where applicable.
+    """
+    # Python stdlib
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    # NumPy
+    try:
+        import numpy as np
+        np.random.seed(seed)
+    except ImportError:
+        pass
+
+    # PyTorch
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            # Deterministic CUDA (may impact performance)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+    except ImportError:
+        pass
+
+    # Transformers / Hugging Face
+    try:
+        from transformers import set_seed as hf_set_seed
+        hf_set_seed(seed)
+    except ImportError:
+        pass

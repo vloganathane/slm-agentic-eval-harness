@@ -78,6 +78,9 @@ def train_lora(
     lora_dropout: float = 0.05,
     use_lora: bool = True,
     resume_from_checkpoint: str | bool | None = None,
+    fsdp: str | None = None,
+    fsdp_config: dict[str, Any] | str | None = None,
+    deepspeed: dict[str, Any] | str | None = None,
 ) -> TrainResult:
     """Run LoRA fine-tuning and return a TrainResult.
 
@@ -94,6 +97,9 @@ def train_lora(
         lora_alpha: LoRA alpha
         lora_dropout: LoRA dropout
         use_lora: Whether to apply LoRA
+        fsdp: FSDP strategy (e.g., "full_shard", "shard_grad_op", "hybrid_shard")
+        fsdp_config: FSDP configuration dict or path to config file
+        deepspeed: DeepSpeed configuration dict or path to config file
 
     Returns:
         TrainResult with all output paths and param counts
@@ -190,6 +196,9 @@ def train_lora(
         max_length=1024,
         dataset_text_field="text",
         packing=False,
+        fsdp=fsdp,
+        fsdp_config=fsdp_config,
+        deepspeed=deepspeed,
     )
 
     # ---- Train ----
@@ -276,8 +285,30 @@ def main() -> int:
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
     parser.add_argument("--no-lora", action="store_true", help="Disable LoRA (full fine-tune)")
+    parser.add_argument("--fsdp", type=str, help="FSDP strategy (e.g., full_shard, shard_grad_op, hybrid_shard)")
+    parser.add_argument("--fsdp-config", type=str, help="FSDP config dict as JSON string or path to config file")
+    parser.add_argument("--deepspeed", type=str, help="DeepSpeed config dict as JSON string or path to config file")
 
     args = parser.parse_args()
+
+    # Parse JSON string args for fsdp_config and deepspeed
+    fsdp_config = None
+    if args.fsdp_config:
+        import json
+        try:
+            fsdp_config = json.loads(args.fsdp_config)
+        except json.JSONDecodeError:
+            # Treat as file path
+            fsdp_config = args.fsdp_config
+
+    deepspeed = None
+    if args.deepspeed:
+        import json
+        try:
+            deepspeed = json.loads(args.deepspeed)
+        except json.JSONDecodeError:
+            # Treat as file path
+            deepspeed = args.deepspeed
 
     try:
         result = train_lora(
@@ -293,6 +324,9 @@ def main() -> int:
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
             use_lora=not args.no_lora,
+            fsdp=args.fsdp,
+            fsdp_config=fsdp_config,
+            deepspeed=deepspeed,
         )
         print(f"Run ID: {result.run_id}")
         print(f"Model: {result.model_path}")
