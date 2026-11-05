@@ -8,10 +8,8 @@ This merges the best of both pipelines:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -19,13 +17,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from slm_eval.pipelines.dedup import deduplicate_cases, check_leakage, DEFAULT_JACCARD_THRESHOLD
-from slm_eval.pipelines.exporters import get_exporter, list_formats, DEFAULT_TEMPLATES
-from slm_eval.pipelines.quality import DataQualityReport, save_report
-from slm_eval.pipelines.docling_pipeline import DoclingPipeline, process_directory, integrate_with_pipeline
-from slm_eval.providers.data_pull import AutoDownloader
 from slm_eval.hashing import sha256_json
-from slm_eval.split import split_stratified, NEAR_DUP_THRESHOLD, Split
+from slm_eval.pipelines.dedup import DEFAULT_JACCARD_THRESHOLD, check_leakage, deduplicate_cases
+from slm_eval.pipelines.docling_pipeline import (
+    DoclingPipeline,
+    integrate_with_pipeline,
+    process_directory,
+)
+from slm_eval.pipelines.exporters import DEFAULT_TEMPLATES, get_exporter, list_formats
+from slm_eval.pipelines.quality import DataQualityReport, save_report
+from slm_eval.providers.data_pull import AutoDownloader
+from slm_eval.split import NEAR_DUP_THRESHOLD, split_stratified
 
 
 @dataclass
@@ -534,7 +536,7 @@ def build_dataset(config: BuildConfig) -> BuildResult:
     docling_processed_cases = []
     if config.use_docling:
         if config.progress:
-            print(f"[1.5/6] Processing documents with docling...")
+            print("[1.5/6] Processing documents with docling...")
 
         docling_output_dir = config.docling_output_dir or (out_dir / "docling_output")
         docling_output_dir.mkdir(parents=True, exist_ok=True)
@@ -561,7 +563,7 @@ def build_dataset(config: BuildConfig) -> BuildResult:
                 docling_results = None
         else:
             if config.progress:
-                print(f"      ⚠️  Docling requires a directory source. Skipping docling processing.")
+                print("      ⚠️  Docling requires a directory source. Skipping docling processing.")
 
     # Use docling-processed cases if available
     cases_to_use = docling_processed_cases if docling_processed_cases else cases
@@ -572,7 +574,7 @@ def build_dataset(config: BuildConfig) -> BuildResult:
 
     if config.validate or config.dedup:
         if config.progress:
-            print(f"[2/6] Validating and deduplicating...")
+            print("[2/6] Validating and deduplicating...")
         validation_report, cases_to_use, bad_cases = validate_cases(cases_to_use, dedup_threshold=NEAR_DUP_THRESHOLD)
         if config.progress:
             print(f"      Valid: {validation_report.valid_cases}, Invalid: {validation_report.invalid_cases}, Dedup removed: {validation_report.dedup_removed}")
@@ -626,14 +628,14 @@ def build_dataset(config: BuildConfig) -> BuildResult:
     quality_report_path = None
     if config.score:
         if config.progress:
-            print(f"[5/6] Generating quality report...")
+            print("[5/6] Generating quality report...")
         quality = generate_quality_report(cases_to_use)
         quality_report_path = out_dir / "quality_report.json"
         quality_report_path.write_text(json.dumps(quality, indent=2))
 
     # 6️⃣ Manifest
     if config.progress:
-        print(f"[6/6] Writing manifest...")
+        print("[6/6] Writing manifest...")
 
     source_hash = sha256_json(cases_to_use)
     quality_dist = generate_quality_report(cases_to_use)
@@ -711,7 +713,7 @@ def main():
 
     try:
         result = build_dataset(config)
-        print(f"\n✅ Success!")
+        print("\n✅ Success!")
         print(f"   Train: {result.train_count}")
         print(f"   Valid: {result.valid_count}")
         print(f"   Test:  {result.test_count}")

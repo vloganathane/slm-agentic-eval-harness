@@ -198,7 +198,6 @@ def test_similarity_validator_config_validation():
 def test_similarity_scores_reports_raw_values():
     import pytest
 
-    from slm_eval.config import EvalConfig
     from slm_eval.scoring import similarity_scores
 
     cfg = _sim_cfg(metric="token_f1", threshold=0.5)

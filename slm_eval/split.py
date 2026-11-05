@@ -152,7 +152,7 @@ def split_stratified(
     prefix_len = 50
     max_words = 100
     jaccard_threshold = NEAR_DUP_THRESHOLD  # 0.6
-    
+
     buckets: dict[int, list[tuple[str, str]]] = {}  # bucket -> [(text, case_id)]
     for c in usable_train:
         text = c["text"]
@@ -161,13 +161,13 @@ def split_stratified(
         if bucket not in buckets:
             buckets[bucket] = []
         buckets[bucket].append((text, c["case_id"]))
-    
+
     dupes = []
     for c in usable_holdout:
         text = c["text"]
         prefix = text[:prefix_len]
         bucket = hash(prefix) % num_buckets
-        
+
         is_dup = False
         if bucket in buckets:
             words1 = set(text.lower().split()[:max_words])

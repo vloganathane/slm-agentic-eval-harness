@@ -15,16 +15,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from slm_eval.dataset_validator import DatasetValidator, DataQualityReport
-from slm_eval.providers.data_pull import AutoDownloader
-from slm_eval.exporters import SFTExporter, AlpacaExporter, ChatMLExporter
+from slm_eval.dataset_validator import DatasetValidator
+from slm_eval.exporters import AlpacaExporter, ChatMLExporter, SFTExporter
 from slm_eval.hashing import sha256_json
-from slm_eval.split import split_stratified, NEAR_DUP_THRESHOLD, minhash_signature, signature_similarity
+from slm_eval.providers.data_pull import AutoDownloader
+from slm_eval.split import (
+    NEAR_DUP_THRESHOLD,
+    minhash_signature,
+    signature_similarity,
+    split_stratified,
+)
 
 # ----------------------------------------------------------------------
 # Helper functions
@@ -41,7 +45,7 @@ def load_cases(source: str, dest_dir: Path) -> list[dict[str, Any]]:
 
     # Load cases.jsonl (or equivalent) into memory
     cases = []
-    
+
     # First try cases.jsonl
     if raw_path.is_file() and raw_path.suffix == ".jsonl":
         cases_path = raw_path
@@ -100,7 +104,7 @@ def load_cases_from_parquet(parquet_files: list[Path]) -> list[dict[str, Any]]:
         import pandas as pd
     except ImportError:
         raise RuntimeError("pandas required to load parquet files. Run: pip install pandas")
-    
+
     cases = []
     for pf in parquet_files:
         df = pd.read_parquet(pf)
@@ -114,7 +118,7 @@ def load_cases_from_parquet(parquet_files: list[Path]) -> list[dict[str, Any]]:
                 case["case_id"] = str(row.get("id", f"auto_{len(cases)}"))
             else:
                 case["case_id"] = f"auto_{len(cases)}"
-            
+
             # Text field - try multiple common column names
             text_val = ""
             for col in ["text", "content", "sentence", "document", "input"]:
@@ -128,7 +132,7 @@ def load_cases_from_parquet(parquet_files: list[Path]) -> list[dict[str, Any]]:
                         text_val = str(row.get(col, ""))
                         break
             case["text"] = text_val
-            
+
             # Gold - try to extract structured gold or use all other columns
             if "gold" in df.columns:
                 case["gold"] = row.get("gold", {})
@@ -138,13 +142,13 @@ def load_cases_from_parquet(parquet_files: list[Path]) -> list[dict[str, Any]]:
                 # Use all other columns as gold
                 gold = {k: v for k, v in row.items() if k not in ["case_id", "id", "text", "content", "strata", "sentence", "document", "input", "label", "target", "class"]}
                 case["gold"] = gold
-            
+
             # Strata - provide defaults if not present
             if "strata" in df.columns:
                 case["strata"] = row.get("strata", {})
             else:
                 case["strata"] = {"quality": "high", "ocr_signal": "usable", "layout": "clean", "layout_type": "clean"}
-            
+
             cases.append(case)
     return cases
 
@@ -155,7 +159,7 @@ def load_cases_from_csv(csv_files: list[Path]) -> list[dict[str, Any]]:
         import pandas as pd
     except ImportError:
         raise RuntimeError("pandas required to load CSV files. Run: pip install pandas")
-    
+
     cases = []
     for cf in csv_files:
         df = pd.read_csv(cf)
@@ -169,7 +173,7 @@ def load_cases_from_csv(csv_files: list[Path]) -> list[dict[str, Any]]:
                 case["case_id"] = str(row.get("id", f"auto_{len(cases)}"))
             else:
                 case["case_id"] = f"auto_{len(cases)}"
-            
+
             # Text field - try multiple common column names
             text_val = ""
             for col in ["text", "content", "sentence", "document", "input", "Passengerid"]:
@@ -183,7 +187,7 @@ def load_cases_from_csv(csv_files: list[Path]) -> list[dict[str, Any]]:
                         text_val = str(row.get(col, ""))
                         break
             case["text"] = text_val
-            
+
             # Gold - try to extract structured gold or use all other columns
             if "gold" in df.columns:
                 case["gold"] = row.get("gold", {})
@@ -197,13 +201,13 @@ def load_cases_from_csv(csv_files: list[Path]) -> list[dict[str, Any]]:
                 # Use all other columns as gold
                 gold = {k: v for k, v in row.items() if k not in ["case_id", "id", "text", "content", "strata", "sentence", "document", "input", "label", "target", "class", "Passengerid", "Survived", "2urvived"]}
                 case["gold"] = gold
-            
+
             # Strata - provide defaults if not present
             if "strata" in df.columns:
                 case["strata"] = row.get("strata", {})
             else:
                 case["strata"] = {"quality": "high", "ocr_signal": "usable", "layout": "clean", "layout_type": "clean"}
-            
+
             cases.append(case)
     return cases
 
@@ -296,7 +300,6 @@ def split_stratified_cases(
     seed: int = 42,
 ) -> dict[str, list[dict[str, Any]]]:
     """Return train/valid/test splits."""
-    from slm_eval.split import Split
     split = split_stratified(cases, strata_keys=keys, fraction=fraction, seed=seed)
     return {"train": split.train, "valid": split.holdout, "test": split.holdout}
 

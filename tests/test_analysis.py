@@ -18,10 +18,10 @@ def test_dataset_analysis_basic():
             f.write('{"case_id": "c1", "text": "test text", "strata": {"ocr_signal": "usable", "quality": "high"}}\n')
             f.write('{"case_id": "c2", "text": "test text", "strata": {"ocr_signal": "unextractable", "quality": "low"}}\n')
             f.write('{"case_id": "c3", "text": "test text", "strata": {"ocr_signal": "usable", "quality": "medium"}}\n')
-        
+
         analyzer = DatasetAnalyzer(cases_path)
         analysis = analyzer.analyze()
-        
+
         assert analysis.n_cases == 3
         assert analysis.n_fields == 0  # No fields defined in this test
         assert analysis.ocr_signal_dist["usable"] == 2
@@ -35,10 +35,10 @@ def test_dataset_analysis_with_fields():
         with cases_path.open("w") as f:
             f.write('{"case_id": "c1", "text": "test text", "gold": {"field1": "value"}, "strata": {"ocr_signal": "usable", "quality": "high"}}\n')
             f.write('{"case_id": "c2", "text": "test text", "gold": {"field2": "value"}, "strata": {"ocr_signal": "unextractable", "quality": "low"}}\n')
-        
+
         analyzer = DatasetAnalyzer(cases_path)
         analysis = analyzer.analyze()
-        
+
         assert analysis.n_cases == 2
         assert "field1" in analysis.fields_seen
         assert "field2" in analysis.fields_seen
@@ -54,10 +54,10 @@ def test_dataset_analysis_duplicate_detection():
             f.write('{"case_id": "c1", "text": "identical text", "strata": {"ocr_signal": "usable"}}\n')
             f.write('{"case_id": "c2", "text": "identical text", "strata": {"ocr_signal": "usable"}}\n')
             f.write('{"case_id": "c3", "text": "different text", "strata": {"ocr_signal": "usable"}}\n')
-        
+
         analyzer = DatasetAnalyzer(cases_path)
         analysis = analyzer.analyze()
-        
+
         # Should find 1 duplicate pair (c1 and c2)
         assert len(analysis.duplicate_pairs) == 1
         assert analysis.duplicate_pairs[0][2] >= 0.6  # similarity threshold
@@ -72,13 +72,13 @@ def test_error_analysis_basic():
             f.write('{"case_id": "c1", "field": "field1", "tp": 1, "fp": 0, "fn": 0}\n')
             f.write('{"case_id": "c1", "field": "field1", "tp": 0, "fp": 1, "fn": 0}\n')
             f.write('{"case_id": "c2", "field": "field2", "tp": 0, "fp": 0, "fn": 1}\n')
-        
+
         # Create mock cases.jsonl in config parent
         cases_path = Path(tmpdir) / "cases.jsonl"
         with cases_path.open("w") as f:
             f.write('{"case_id": "c1", "strata": {"mode": "test"}}\n')
             f.write('{"case_id": "c2", "strata": {"mode": "test"}}\n')
-        
+
         # Create mock config
         config_path = Path(tmpdir) / "config.yaml"
         with config_path.open("w") as f:
@@ -89,10 +89,10 @@ def test_error_analysis_basic():
             f.write("strata:\n")
             f.write("  keys:\n")
             f.write("    - mode\n")
-        
+
         analyzer = ErrorAnalyzer(score_path, config_path, "test-run")
         analysis = analyzer.analyze()
-        
+
         assert analysis.n_cases == 2
         assert analysis.total_tp == 1
         assert analysis.total_fp == 1
@@ -108,7 +108,7 @@ def test_gate_analysis_basic():
         gate_path = Path(tmpdir) / "gate.json"
         config_path = Path(tmpdir) / "config.yaml"
         score_path = Path(tmpdir) / "scores.jsonl"
-        
+
         # Create gate.json
         with gate_path.open("w") as f:
             json.dump({
@@ -121,12 +121,12 @@ def test_gate_analysis_basic():
                 "strata": [],
                 "run_id": "test-run"
             }, f)
-            
+
         # Create scores.jsonl
         with score_path.open("w") as f:
             f.write('{"case_id": "c1", "field": "field1", "tp": 0, "fp": 1, "fn": 0}\n')
             f.write('{"case_id": "c2", "field": "field1", "tp": 1, "fp": 0, "fn": 0}\n')
-            
+
         # Create config.yaml
         with config_path.open("w") as f:
             f.write("task_description: test\n")
@@ -135,10 +135,10 @@ def test_gate_analysis_basic():
             f.write("strata:\n")
             f.write("  keys:\n")
             f.write("    - mode\n")
-            
+
         analyzer = GateAnalyzer(gate_path, config_path, score_path)
         analysis = analyzer.analyze()
-        
+
         assert analysis.passed == False
         assert analysis.micro_f1 == 0.5
         assert analysis.ci_lower == 0.3
@@ -151,6 +151,6 @@ def test_llm_analyzer_basic():
     """Test LLM analyzer functionality."""
     # This test verifies that our LLM analyzer can be instantiated
     # The actual LLM client requires network access, so we'll test instantiation
-    
+
     analyzer = create_llm_analyzer()
     assert analyzer is not None

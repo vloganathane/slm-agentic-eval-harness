@@ -84,10 +84,10 @@ def _case_minhash(case: SyntheticCase) -> str:
 def _fetch_real_merchants(client: LLMClient | WebSearchProvider | None, cfg) -> list[dict]:
     """Fetch real merchant/item data from web search or use defaults."""
     merchants = DEFAULT_MERCHANTS.copy()
-    
+
     if client is None:
         return merchants
-    
+
     # Try to get real merchant data via web search
     try:
         # Search for current popular merchants and items
@@ -96,7 +96,7 @@ def _fetch_real_merchants(client: LLMClient | WebSearchProvider | None, cfg) -> 
             "common grocery store receipt format items prices",
             "restaurant receipt format menu items prices",
         ]
-        
+
         for query in queries:
             if hasattr(client, 'web_search'):
                 results = client.web_search(query, max_results=3)
@@ -104,7 +104,7 @@ def _fetch_real_merchants(client: LLMClient | WebSearchProvider | None, cfg) -> 
                 results = client.search(query, max_results=3)
             else:
                 continue
-                
+
             # Parse results to extract merchant/item info (simplified)
             for r in results:
                 content = r.get("content", "").lower()
@@ -114,7 +114,7 @@ def _fetch_real_merchants(client: LLMClient | WebSearchProvider | None, cfg) -> 
                         merchants.append(merchant)
     except Exception:  # noqa: BLE001, S110 - web search failure, fall back to defaults
         pass  # Fall back to defaults
-    
+
     return merchants
 
 
@@ -124,9 +124,9 @@ def _build_prompt_from_real_data(merchants: list[dict], n_propose: int) -> str:
     for m in merchants[:10]:  # Limit to top 10
         items_str = ", ".join([f"{item[0]} ${item[1]:.2f}" for item in m["items"][:5]])
         merchant_lines.append(f"- {m['name']}: {items_str}")
-    
+
     merchant_list = "\n".join(merchant_lines)
-    
+
     return f"""Generate {n_propose} diverse receipt/invoice OCR text samples for training an extraction model.
 
 Use these real-world merchants and items as inspiration (but vary them):
@@ -159,9 +159,9 @@ def _generate_with_llm(client: LLMClient, prompt: str, temperature: float = 0.8,
     """
     import queue
     import threading
-    
+
     result_queue = queue.Queue()
-    
+
     def worker():
         try:
             full_prompt = f"System: You generate realistic receipt/invoice OCR samples for ML training. Output ONLY a JSON array.\n\nUser: {prompt}"
@@ -173,16 +173,16 @@ def _generate_with_llm(client: LLMClient, prompt: str, temperature: float = 0.8,
                 result_queue.put(None)
         except Exception:  # noqa: BLE001 - LLM failure, fall back to templates
             result_queue.put(None)
-    
+
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
     thread.join(timeout=timeout_seconds)
-    
+
     if thread.is_alive():
         # Timeout - fall back to templates
         return None
-    
+
     try:
         return result_queue.get_nowait()
     except queue.Empty:
@@ -198,7 +198,7 @@ def _generate_from_templates(merchants: list[dict], n_propose: int) -> list[dict
         # Create varied formats
         layout = random.choice(["itemized", "simple", "mixed"])
         quality = random.choice(["high", "medium", "low"])
-        
+
         if layout == "itemized":
             lines = [f"{name}\n123 Main St"]
             for item_name, price in items[:random.randint(2, 4)]:
@@ -223,20 +223,20 @@ def _generate_from_templates(merchants: list[dict], n_propose: int) -> list[dict
             lines.append(f"TAX: {tax:.2f}")
             lines.append(f"TOTAL: {total:.2f}")
             text = "\n".join(lines)
-        
+
         # Build gold
         line_items = [{"name": item[0], "qty": random.randint(1, 3), "price": item[1]} for item in items[:random.randint(1, 4)]]
         total = sum(li["qty"] * li["price"] for li in line_items)
-        
+
         from datetime import date
         today = date.today().isoformat()
-        
+
         templates.append({
             "text": text,
             "gold": {"total": round(total, 2), "line_items": line_items, "date": today, "merchant": name},
             "strata": {"quality": quality, "layout": layout}
         })
-    
+
     return templates
 
 
@@ -275,20 +275,20 @@ def generate_synthetic_cases(
         )
 
     holdout_minhashes = _load_holdout_minhashes(holdout_dir)
-    
+
     # Fetch real merchant data
     merchants = _fetch_real_merchants(client, cfg)
-    
+
     # Try LLM generation first
     proposed_data = None
     if hasattr(client, 'complete'):
         prompt = _build_prompt_from_real_data(merchants, n_propose)
         proposed_data = _generate_with_llm(client, prompt, temperature)
-    
+
     # Fallback to template-based generation
     if proposed_data is None:
         proposed_data = _generate_from_templates(merchants, n_propose)
-    
+
     # Limit to n_propose
     proposed_data = proposed_data[:n_propose]
 

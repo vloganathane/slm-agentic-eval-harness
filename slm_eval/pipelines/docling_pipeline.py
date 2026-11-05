@@ -9,9 +9,8 @@ The pipeline is designed to be optional and integrates with the unified dataset 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any
 
 # Import docling classes
 try:
@@ -28,18 +27,18 @@ except ImportError:
             self.text = content
             self.pages = []
             self.images = []
-            
+
     class ProcessorConfig:
         """Mock processor config when docling is not installed."""
         def __init__(self, **kwargs):
             for k, v in kwargs.items():
                 setattr(self, k, v)
-            
+
     class DoclingProcessor:
         def __init__(self, config: ProcessorConfig | None = None):
             self.config = config or ProcessorConfig()
-            
-        def process(self, source: Union[str, Path]) -> Document:
+
+        def process(self, source: str | Path) -> Document:
             # Simplified mock implementation
             if isinstance(source, str):
                 # Assume it's a file path or URL
@@ -66,20 +65,20 @@ def load_docling_config() -> ProcessorConfig:
 
 class DoclingPipeline:
     """Docling-based document processing pipeline."""
-    
+
     def __init__(self, config: ProcessorConfig | None = None):
         self.config = config or load_docling_config()
         self.processor = DoclingProcessor(self.config)
-        
-    def process_file(self, source: Union[str, Path]) -> Dict[str, Any]:
+
+    def process_file(self, source: str | Path) -> dict[str, Any]:
         """Process a single file and return structured document data."""
         try:
             # Process the file
             doc = self.processor.process(source)
-            
+
             # Extract text content
             text_content = doc.text
-            
+
             # Extract metadata
             metadata = {
                 "source": str(source),
@@ -87,14 +86,14 @@ class DoclingPipeline:
                 "page_count": len(doc.pages) if hasattr(doc, 'pages') else 0,
                 "image_count": len(doc.images) if hasattr(doc, 'images') else 0,
             }
-            
+
             return {
                 "text": text_content,
                 "metadata": metadata,
                 "success": True,
                 "error": None
             }
-            
+
         except Exception as e:
             return {
                 "text": "",
@@ -102,8 +101,8 @@ class DoclingPipeline:
                 "success": False,
                 "error": str(e)
             }
-            
-    def _get_file_type(self, source: Union[str, Path]) -> str:
+
+    def _get_file_type(self, source: str | Path) -> str:
         """Determine file type from extension."""
         if isinstance(source, str) or hasattr(source, 'suffix'):
             ext = (str(source).lower() if isinstance(source, str) else source.suffix.lower())
@@ -126,25 +125,25 @@ class DoclingPipeline:
         return 'unknown'
 
 def process_directory(
-    directory: Union[str, Path],
-    output_dir: Union[str, Path],
+    directory: str | Path,
+    output_dir: str | Path,
     format: str = "jsonl",
     include_subdirs: bool = True
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Process all files in a directory and save results."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     results = []
     files_processed = 0
     files_failed = 0
-    
+
     # Get all files
     if include_subdirs:
         files = list(Path(directory).rglob("*"))
     else:
         files = list(Path(directory).glob("*"))
-    
+
     for file_path in files:
         if file_path.is_file():
             try:
@@ -161,17 +160,17 @@ def process_directory(
                     files_processed += 1
                 else:
                     files_failed += 1
-            except Exception as e:
+            except Exception:
                 files_failed += 1
-                
+
     return results, files_processed, files_failed
 
 def integrate_with_pipeline(
-    cases: List[Dict[str, Any]],
-    docling_results: List[Dict[str, Any]],
+    cases: list[dict[str, Any]],
+    docling_results: list[dict[str, Any]],
     text_field: str = "text",
     id_field: str = "case_id"
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Integrate docling results with existing cases."""
     # Build a mapping from source to docling result
     result_by_source = {}

@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 # Configuration constants
 PREFIX_WORDS = 5         # Words to use for prefix hash bucketing
 MAX_WORDS = 100          # Max words to consider for Jaccard

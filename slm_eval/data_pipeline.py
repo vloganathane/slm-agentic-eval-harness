@@ -173,7 +173,7 @@ class DataPipeline:
         """
         analyzer = DatasetAnalyzer(cases_path, minhash_threshold=minhash_threshold)
         analysis = analyzer.analyze()
-        
+
         # Convert DatasetAnalysis to dict manually
         return {
             "n_cases": analysis.n_cases,

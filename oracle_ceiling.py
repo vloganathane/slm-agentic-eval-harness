@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 from slm_eval.config import EvalConfig
 from slm_eval.scoring import score_case

@@ -52,18 +52,18 @@ class LLMClient(Protocol):
 
 class WebSearchProvider:
     """Web search provider for real-world data fetching."""
-    
+
     def __init__(self, provider: str = "tavily", api_key: str | None = None):
         self.provider = provider
         self.api_key = api_key or os.environ.get(f"{provider.upper()}_API_KEY")
         self._client = None
-        
+
         if provider == "tavily" and HAS_TAVILY and self.api_key:
             self._client = TavilyClient(api_key=self.api_key)
         elif provider == "crw":
             # crw is a CLI tool - check if it's available
             self._client = self._check_crw_available()
-    
+
     def _check_crw_available(self) -> bool:
         """Check if crw CLI is available."""
         try:
@@ -73,7 +73,7 @@ class WebSearchProvider:
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
             return False
-    
+
     def search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
         if self.provider == "tavily" and self._client:
             try:
@@ -91,7 +91,7 @@ class WebSearchProvider:
                 env = os.environ.copy()
                 if self.api_key:
                     env["CRW_API_KEY"] = self.api_key
-                
+
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env, check=True)
                 if result.returncode == 0 and result.stdout.strip():
                     data = json.loads(result.stdout)
@@ -110,7 +110,7 @@ class WebSearchProvider:
                 pass
         # Fallback to simple HTTP fetch if no provider
         return []
-    
+
     def fetch(self, url: str) -> str:
         if not HAS_HTTPX:
             return ""
@@ -210,7 +210,7 @@ class FixtureJudge:
     ) -> LLMResponse:
         text = json.dumps({"verdict": "match", "reason": "fixture judge"})
         return LLMResponse(text=text, tokens_in=len(prompt) // 4, tokens_out=len(text) // 4)
-    
+
     def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
         return []
 
@@ -237,7 +237,7 @@ class ScriptedClient:
             self.image_calls.append(list(images))
         text = self._responses.get(prompt, self._default)
         return LLMResponse(text=text, tokens_in=len(prompt) // 4, tokens_out=len(text) // 4)
-    
+
     def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
         return []
 
@@ -263,7 +263,7 @@ def parse_json_response(text: str) -> dict[str, Any]:
 
 class WebEnabledClient(OpenAICompatClient):
     """OpenAI-compatible client with web search capability for synthetic generation."""
-    
+
     def __init__(
         self,
         base_url: str,
@@ -286,20 +286,20 @@ class WebEnabledClient(OpenAICompatClient):
             usd_per_1k_tokens=usd_per_1k_tokens,
         )
         self._web_search = WebSearchProvider(web_search_provider, web_search_api_key)
-    
+
     def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
         return self._web_search.search(query, max_results)
-    
+
     def web_fetch(self, url: str) -> str:
         return self._web_search.fetch(url)
 
 
 class WebEnabledFixtureClient(FixtureJudge):
     """Fixture client with mock web search for testing."""
-    
+
     def __init__(self, mock_results: dict[str, list[dict[str, str]]] | None = None):
         self._mock_results = mock_results or {}
-    
+
     def web_search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
         # Simple keyword matching for mock results
         for key, results in self._mock_results.items():

@@ -30,6 +30,7 @@ calibration/*.jsonl
 .vscode/
 *.swp
 *.swo
+.omc/
 
 # OS
 .DS_Store

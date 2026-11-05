@@ -9,39 +9,37 @@ from pathlib import Path
 import pytest
 
 from slm_eval.pipelines.builder import (
-    build_dataset,
     BuildConfig,
-    load_cases,
-    validate_cases,
-    split_cases,
-    export_split,
-    generate_quality_report,
-    generate_manifest,
-    _load_jsonl,
-    _load_json,
-    _normalize_cases,
     _default_strata,
+    _load_json,
+    _load_jsonl,
+    _normalize_cases,
+    build_dataset,
+    export_split,
+    generate_manifest,
+    generate_quality_report,
+    split_cases,
+    validate_cases,
 )
 from slm_eval.pipelines.dedup import (
-    deduplicate_cases,
     check_leakage,
     compute_text_hash,
-    word_set,
+    deduplicate_cases,
     jaccard_similarity,
-    DEFAULT_JACCARD_THRESHOLD,
+    word_set,
 )
 from slm_eval.pipelines.exporters import (
-    get_exporter,
-    list_formats,
-    SFTExporter,
+    DEFAULT_TEMPLATES,
     AlpacaExporter,
     ChatMLExporter,
-    ShareGPTExporter,
-    OpenAIChatExporter,
     CompletionExporter,
-    DEFAULT_TEMPLATES,
+    OpenAIChatExporter,
+    SFTExporter,
+    ShareGPTExporter,
+    get_exporter,
+    list_formats,
 )
-from slm_eval.pipelines.quality import DataQualityReport, save_report, load_report
+from slm_eval.pipelines.quality import DataQualityReport, load_report, save_report
 
 
 # Test fixtures
@@ -596,13 +594,13 @@ def test_docling_build_dataset_integration(tmp_path):
     # Create a directory with input JSONL and mock document files
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    
+
     # Create input JSONL with cases
     _write_jsonl(input_dir / "cases.jsonl", [
         _case(f"c{i}", f"text {i}", {"value": i}, {"quality": "high" if i % 2 == 0 else "low"})
         for i in range(20)
     ])
-    
+
     # Create mock document files
     (input_dir / "doc1.pdf").write_text("Receipt: Total $100, Vendor: Acme Corp")
     (input_dir / "doc2.txt").write_text("Invoice: Total $200, Vendor: Beta LLC")
@@ -664,7 +662,6 @@ def test_docling_integration_with_pipeline(tmp_path):
 def test_docling_build_config_defaults():
     """Test BuildConfig defaults for docling options."""
     from slm_eval.pipelines.builder import BuildConfig
-    import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
         config = BuildConfig(source=tmp, out_dir=Path(tmp))

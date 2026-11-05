@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import re
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-import hashlib
-
-from slm_eval.hashing import sha256_json
-from slm_eval.split import minhash_signature, signature_similarity, NEAR_DUP_THRESHOLD
+from slm_eval.split import NEAR_DUP_THRESHOLD
 
 
 @dataclass
@@ -105,12 +99,12 @@ class DatasetValidator:
         """
         if not cases:
             return [], [], 0
-        
+
         # Step 1: Exact text dedup
         seen_texts: set[str] = set()
         exact_kept: list[dict[str, Any]] = []
         exact_removed: list[dict[str, Any]] = []
-        
+
         for case in cases:
             text = case.get("text", "")
             if text in seen_texts:
@@ -118,26 +112,26 @@ class DatasetValidator:
             else:
                 seen_texts.add(text)
                 exact_kept.append(case)
-        
+
         # Step 2: Fast near-dup on unique texts
         # Use prefix hashing + Jaccard similarity on word sets
         unique_texts = [c.get("text", "") for c in exact_kept]
-        
+
         # Near-dup threshold: use same as split leakage check for consistency
         jaccard_threshold = self.dedup_threshold
-        
+
         buckets: dict[int, list[str]] = {}
         num_buckets = 10000
         prefix_len = 50
         max_words = 100
-        
+
         kept_texts: set[str] = set()
         near_removed_count = 0
-        
+
         for text in unique_texts:
             prefix = text[:prefix_len]
             bucket = hash(prefix) % num_buckets
-            
+
             is_dup = False
             if bucket in buckets:
                 # Compute Jaccard on word sets
@@ -155,7 +149,7 @@ class DatasetValidator:
                         if jaccard >= jaccard_threshold:
                             is_dup = True
                             break
-            
+
             if is_dup:
                 near_removed_count += 1
             else:
@@ -163,17 +157,17 @@ class DatasetValidator:
                 if bucket not in buckets:
                     buckets[bucket] = []
                 buckets[bucket].append(text)
-        
+
         # Reconstruct kept cases
         final_kept = [c for c in exact_kept if c.get("text", "") in kept_texts]
         final_removed = exact_removed
-        
+
         # Add near-dup removed cases
         removed_texts = set(unique_texts) - kept_texts
         for case in exact_kept:
             if case.get("text", "") in removed_texts:
                 final_removed.append(case)
-        
+
         return final_kept, final_removed, len(final_removed)
 
     def validate(self, cases: list[dict[str, Any]]) -> tuple[DataQualityReport, list[dict[str, Any]], list[dict[str, Any]]]:
