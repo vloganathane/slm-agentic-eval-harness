@@ -587,32 +587,32 @@ slm-eval data \
 ```bash
 slm-eval train \
   -c eval_config.yaml \
-  --base-model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+  --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
   --dataset runs/<eval_run>/training_format/train.jsonl \
   --output-dir checkpoints/lora-v1 \
   --epochs 3 \
-  --batch-size 4 \
-  --learning-rate 2e-4 \
+  --batch-size 2 \
+  --lr 2e-4 \
   --lora-r 16 \
-  --lora-alpha 32 \
-  --lora-dropout 0.05
+  --lora-alpha 32
 ```
 
 ### Training Config
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--base-model` | required | HF model ID or local path |
-| `--dataset` | required | Training JSONL path |
+| `--model` | required | HF model ID or local path |
+| `--dataset` | optional | Training JSONL path |
 | `--output-dir` | required | Checkpoint output directory |
 | `--epochs` | 3 | Number of training epochs |
-| `--batch-size` | 4 | Per-device batch size |
-| `--gradient-accumulation` | 4 | Gradient accumulation steps |
-| `--learning-rate` | 2e-4 | Learning rate |
+| `--batch-size` | 2 | Per-device batch size |
+| `--lr` | 2e-4 | Learning rate |
+| `--use-lora` | true | Apply LoRA PEFT |
 | `--lora-r` | 16 | LoRA rank |
 | `--lora-alpha` | 32 | LoRA alpha (scaling factor) |
-| `--lora-dropout` | 0.05 | LoRA dropout |
-| `--warmup-steps` | 10 | Warmup steps |
+| `--run-id` | optional | Run identifier for tracking |
+| `--resume` | optional | Resume from checkpoint path |
+| `--max-cost` | 50.0 | Max cost per round in USD |
 
 ### Target Modules
 

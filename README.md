@@ -72,7 +72,7 @@ For detailed setup, configuration, and usage, see the [User Guide](docs/USER_GUI
 | Command | Purpose |
 |---|---|
 | `slm-eval data --cases-dir runs/<id> --strata-keys item_count` | Validate, dedup, stratified-split a dataset; writes `splits/` + `training_format/` |
-| `slm-eval train -c eval_config.yaml --dataset runs/<id>/training_format/train.jsonl` | LoRA fine-tune (PEFT/TRL) and emit a checkpoint |
+| `slm-eval train -c eval_config.yaml --model <repo\|path> --dataset runs/<id>/training_format/train.jsonl` | LoRA fine-tune (PEFT/TRL) and emit a checkpoint |
 | `slm-eval serve -c eval_config.yaml --model <repo\|path>` | Launch a vLLM OpenAI-compatible server |
 | `slm-eval run -c eval_config.yaml --model <repo> --auto-serve` | Run the gate, launching vLLM around inference automatically |
 
