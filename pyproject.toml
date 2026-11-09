@@ -33,7 +33,7 @@ keywords = [
     "modal",
 ]
 dependencies = [
-    "pydantic>=2",
+    "pydantic>=2.14.3",
     "openai>=1",
     "tenacity",
     "numpy",
