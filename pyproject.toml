@@ -34,7 +34,7 @@ keywords = [
 ]
 dependencies = [
     "pydantic>=2",
-    "openai>=1",
+    "openai>=3.46.0",
     "tenacity",
     "numpy",
     "datasketch",
